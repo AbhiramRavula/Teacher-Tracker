@@ -1,0 +1,71 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email in ['abhiramravula7@gmail.com', 'hodit@matrusri.edu.in']
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidActivityLog(data) {
+      return data.employeeName is string && data.employeeName.size() > 0 && data.employeeName.size() <= 120 &&
+             data.date is string && data.date.size() == 10 &&
+             data.role in ['Faculty', 'Programmer'] &&
+             data.hodStatus in ['Submitted', 'Under Review', 'Verified', 'Approved', 'Flagged'];
+    }
+
+    // Default deny all unknown collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Connection test document
+    match /test/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Activity logs collection
+    match /activity_logs/{logId} {
+      allow read: if true;
+      allow create: if isValidId(logId) && isValidActivityLog(incoming());
+      allow update: if isValidId(logId) && (
+        isAdmin() ||
+        (isValidActivityLog(incoming()) && incoming().employeeName == existing().employeeName)
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Faculty draft autosaves
+    match /drafts/{draftId} {
+      allow read: if true;
+      allow create, update: if isValidId(draftId) &&
+        incoming().employeeName is string && incoming().employeeName.size() <= 120 &&
+        incoming().date is string && incoming().date.size() == 10;
+      allow delete: if true;
+    }
+
+    // Application and Sheets sync settings
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

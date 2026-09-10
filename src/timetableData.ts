@@ -1,3 +1,19 @@
+import {
+  MASTER_FACULTY_DATASET,
+  findFacultyProfile,
+  FACULTY_TIMETABLE_JSON_DICTIONARY,
+  MasterFacultyProfile,
+  DayKey,
+  SlotKey,
+} from './masterTimetableData';
+
+export {
+  MASTER_FACULTY_DATASET,
+  findFacultyProfile,
+  FACULTY_TIMETABLE_JSON_DICTIONARY,
+};
+export type { MasterFacultyProfile };
+
 export interface SubjectAllocation {
   code: string;
   name: string;
@@ -36,6 +52,12 @@ export interface FacultyMember {
   department: string;
   isClassTeacherOf?: string;
   primarySubjects: string[];
+  workload?: {
+    theory: number;
+    lab: number;
+    crt?: number;
+    total: number;
+  };
 }
 
 export const INSTITUTION_INFO = {
@@ -484,139 +506,181 @@ export const CLASSES_TIMETABLE: ClassTimetable[] = [
 ];
 
 export const FACULTY_DIRECTORY: FacultyMember[] = [
+  // 1. Dr. J. Srinivas (Th: 6, Lab: 6, Total: 12)
+  {
+    id: 'fac_srinivas',
+    name: 'Dr. J. Srinivas',
+    normalizedName: 'J SRINIVAS',
+    title: 'Professor / Associate Professor',
+    department: 'Department of Information Technology',
+    primarySubjects: ['Data Structures using C (DS)', 'DS Lab'],
+    workload: { theory: 6, lab: 6, total: 12 },
+  },
+  // 2. MRS. Y. SIRISHA (Th: 9, Lab: 8, Total: 17)
+  {
+    id: 'fac_sirisha',
+    name: 'Mrs. Y. Sirisha',
+    normalizedName: 'Y SIRISHA',
+    title: 'Assistant Professor',
+    department: 'Department of Information Technology',
+    primarySubjects: ['OOAD-B', 'BDA-A & B', 'OS Lab', 'IOT Lab'],
+    workload: { theory: 9, lab: 8, total: 17 },
+  },
+  // 3. Mrs. STVSAV Ramya (Th: 12, Lab: 12, Total: 24)
   {
     id: 'fac_ramya',
-    name: 'MRS. STVSAV. RAMYA',
+    name: 'Mrs. STVSAV Ramya',
     normalizedName: 'STVSAV RAMYA',
     title: 'Assistant Professor & Class Teacher (III IT-A)',
     department: 'Department of Information Technology',
     isClassTeacherOf: 'B.E III SEM - IT SEC-A (Room N 304)',
-    primarySubjects: ['Operating Systems (OS)', 'Operating Systems Lab (OS LAB)'],
+    primarySubjects: ['Operating Systems (OS-A, OS-B, OS-AIML)', 'OS Lab'],
+    workload: { theory: 12, lab: 12, total: 24 },
   },
-  {
-    id: 'fac_bhanu',
-    name: 'MR. G. BHANU PRASAD',
-    normalizedName: 'G BHANU PRASAD',
-    title: 'Assistant Professor & Class Teacher (III IT-B)',
-    department: 'Department of Information Technology',
-    isClassTeacherOf: 'B.E III SEM - IT SEC-B (Room N 305)',
-    primarySubjects: ['Data Structures Lab (DS LAB)', 'Object Oriented Analysis and Design (OOAD)'],
-  },
+  // 4. Mrs. T. Aruna Jyothi (Th: 6, Lab: 14, CRT: 2, Total: 22)
   {
     id: 'fac_aruna',
-    name: 'MRS. T. ARUNA JYOTHI',
+    name: 'Mrs. T. Aruna Jyothi',
     normalizedName: 'T ARUNA JYOTHI',
     title: 'Assistant Professor & Class Teacher (V IT-A)',
     department: 'Department of Information Technology',
     isClassTeacherOf: 'B.E V SEM - IT SEC-A (Room O 205)',
-    primarySubjects: ['Artificial Intelligence (AI)', 'Artificial Intelligence Lab (AI LAB)'],
+    primarySubjects: ['Artificial Intelligence (AI-A & B)', 'AI Lab', 'CRT V SEM A'],
+    workload: { theory: 6, lab: 14, crt: 2, total: 22 },
   },
-  {
-    id: 'fac_mounika',
-    name: 'MRS. K. MOUNIKA',
-    normalizedName: 'K MOUNIKA',
-    title: 'Assistant Professor & Class Teacher (V IT-B)',
-    department: 'Department of Information Technology',
-    isClassTeacherOf: 'B.E V SEM - IT SEC-B (Room O 206)',
-    primarySubjects: ['Full Stack Development (FSD)', 'Full Stack Development Lab (FSD LAB)'],
-  },
-  {
-    id: 'fac_rajesh',
-    name: 'MR. A. RAJESH',
-    normalizedName: 'A RAJESH',
-    title: 'Assistant Professor & Class Teacher (VII IT-A)',
-    department: 'Department of Information Technology',
-    isClassTeacherOf: 'B.E VII SEM - IT SEC-A (Room O 203)',
-    primarySubjects: ['Cyber Security (CS)', 'Mini Project (V IT-A)'],
-  },
+  // 5. Mrs. S. Nagajyothi (Th: 9, Lab: 12, Total: 21)
   {
     id: 'fac_nagajyothi',
-    name: 'MRS. S. NAGAJYOTHI',
+    name: 'Mrs. S. Nagajyothi',
     normalizedName: 'S NAGAJYOTHI',
     title: 'Assistant Professor & Class Teacher (VII IT-B)',
     department: 'Department of Information Technology',
     isClassTeacherOf: 'B.E VII SEM - IT SEC-B (Room O 204)',
-    primarySubjects: ['Operating Systems (OS V Sem)', 'Operating Systems Lab (OS LAB)'],
+    primarySubjects: ['AT&CD', 'OS-A & B', 'OS Lab'],
+    workload: { theory: 9, lab: 12, total: 21 },
   },
+  // 6. Mrs. M. Srividya (Th: 9, Lab: 8, Total: 17)
+  {
+    id: 'fac_srividya',
+    name: 'Mrs. M. Srividya',
+    normalizedName: 'M SRIVIDYA',
+    title: 'Assistant Professor',
+    department: 'Department of Information Technology',
+    primarySubjects: ['Principles of Programming Languages (PPL)', 'CME HCI', 'DS Lab', 'IOT Lab'],
+    workload: { theory: 9, lab: 8, total: 17 },
+  },
+  // 7. Dr. K. Durga Prasad (Th: 11, Lab: 8, CRT: 2, Total: 21)
+  {
+    id: 'fac_durga_prasad',
+    name: 'Dr. K. Durga Prasad',
+    normalizedName: 'K DURGA PRASAD',
+    title: 'Associate Professor',
+    department: 'Department of Information Technology',
+    primarySubjects: ['Digital Electronics & Logic Design (DELD)', 'SE-CME', 'IOT Lab', 'CRT CME'],
+    workload: { theory: 11, lab: 8, crt: 2, total: 21 },
+  },
+  // 8. Mrs. K. Mounika (Th: 6, Lab: 12, CRT: 2, Total: 20)
+  {
+    id: 'fac_mounika',
+    name: 'Mrs. K. Mounika',
+    normalizedName: 'K MOUNIKA',
+    title: 'Assistant Professor & Class Teacher (V IT-B)',
+    department: 'Department of Information Technology',
+    isClassTeacherOf: 'B.E V SEM - IT SEC-B (Room O 206)',
+    primarySubjects: ['Full Stack Development (FSD-A & B)', 'FSD Lab', 'CRT V SEM B'],
+    workload: { theory: 6, lab: 12, crt: 2, total: 20 },
+  },
+  // 9. Mr. A. Rajesh (Th: 9, Lab: 10, CRT: 2, Total: 21)
+  {
+    id: 'fac_rajesh',
+    name: 'Mr. A. Rajesh',
+    normalizedName: 'A RAJESH',
+    title: 'Assistant Professor & Class Teacher (VII IT-A)',
+    department: 'Department of Information Technology',
+    isClassTeacherOf: 'B.E VII SEM - IT SEC-A (Room O 203)',
+    primarySubjects: ['Cyber Security (CS-A & B, CME)', 'CME CD Lab', 'AIML DS Lab', 'CRT V SEM B'],
+    workload: { theory: 9, lab: 10, crt: 2, total: 21 },
+  },
+  // 10. MS. J. Nagalaxmi (Th: 3, Lab: 15, CRT: 2, Total: 20)
+  {
+    id: 'fac_nagalaxmi',
+    name: 'Ms. J. Nagalaxmi',
+    normalizedName: 'J NAGALAXMI',
+    title: 'Assistant Professor',
+    department: 'Department of Information Technology',
+    primarySubjects: ['Web Technologies Lab (WT LAB)', 'CME ML', 'AIML', 'AIML DS Lab', 'CRT CME'],
+    workload: { theory: 3, lab: 15, crt: 2, total: 20 },
+  },
+  // 11. MS. MIZNA (Th: 6, Lab: 16, CRT: 2, Total: 24)
+  {
+    id: 'fac_mizna',
+    name: 'Ms. Mizna',
+    normalizedName: 'MIZNA',
+    title: 'Assistant Professor',
+    department: 'Department of Information Technology',
+    primarySubjects: ['Internet of Things (IOT-A & B)', 'FSD Lab', 'OS Lab', 'CRT V SEM A'],
+    workload: { theory: 6, lab: 16, crt: 2, total: 24 },
+  },
+  // 12. Ms. T. Vijayalaxmi (Th: 3, Lab: 16, CRT: 2, Total: 21)
+  {
+    id: 'fac_vijayalaxmi',
+    name: 'Ms. T. Vijayalaxmi',
+    normalizedName: 'T VIJAYALAXMI',
+    title: 'Assistant Professor',
+    department: 'Department of Information Technology',
+    primarySubjects: ['Web Technologies Lab (WT LAB)', 'CME BDA', 'AIML DS Lab', 'CRT CME'],
+    workload: { theory: 3, lab: 16, crt: 2, total: 21 },
+  },
+  // 13. Mr. Samhith (Corrected from Amith; Active IT Faculty)
+  {
+    id: 'fac_samhith',
+    name: 'Mr. Samhith',
+    normalizedName: 'SAMHITH',
+    title: 'Assistant Professor',
+    department: 'Department of Information Technology',
+    primarySubjects: ['Web Technologies (WT)', 'WT Lab', 'Programming Systems'],
+    workload: { theory: 8, lab: 10, total: 18 },
+  },
+  // 14. MR. G. BHANU PRASAD (Th: 3, Lab: 18, Total: 21)
+  {
+    id: 'fac_bhanu',
+    name: 'Mr. G. Bhanu Prasad',
+    normalizedName: 'G BHANU PRASAD',
+    title: 'Assistant Professor & Class Teacher (III IT-B)',
+    department: 'Department of Information Technology',
+    isClassTeacherOf: 'B.E III SEM - IT SEC-B (Room N 305)',
+    primarySubjects: ['Data Structures Lab (DS LAB)', 'OOAD-A', 'AIML DV Lab'],
+    workload: { theory: 3, lab: 18, total: 21 },
+  },
+  // 15. Mrs. G. SHRAVYA (Th: 4, Lab: 16, CRT: 2, Total: 22)
+  {
+    id: 'fac_shravya',
+    name: 'Mrs. G. Shravya',
+    normalizedName: 'G SHRAVYA',
+    title: 'Assistant Professor',
+    department: 'Department of Information Technology',
+    primarySubjects: ['DS-AIML', 'IOT Lab', 'WT Lab', 'AIML DS Lab', 'CRT V SEM A'],
+    workload: { theory: 4, lab: 16, crt: 2, total: 22 },
+  },
+  // 16. MS. G. AKSHARA (Th: 3, Lab: 16, CRT: 2, Total: 21)
+  {
+    id: 'fac_akshara',
+    name: 'Ms. G. Akshara',
+    normalizedName: 'G AKSHARA',
+    title: 'Assistant Professor',
+    department: 'Department of Information Technology',
+    primarySubjects: ['Software Engineering (SE-A)', 'OS Lab', 'AIML DV Lab', 'CRT V SEM B'],
+    workload: { theory: 3, lab: 16, crt: 2, total: 21 },
+  },
+
+  // Inter-departmental & Visiting Faculty
   {
     id: 'fac_shailaja',
     name: 'DR. J. SHAILAJA',
     normalizedName: 'J SHAILAJA',
     title: 'Associate Professor',
-    department: 'Department of Information Technology',
+    department: 'ECE / IT Labs',
     primarySubjects: ['Electronic Devices and Sensors (EDS)', 'EDS Lab'],
-  },
-  {
-    id: 'fac_srinivas',
-    name: 'DR. J. SRINIVAS',
-    normalizedName: 'J SRINIVAS',
-    title: 'Professor / Associate Professor',
-    department: 'Department of Information Technology',
-    primarySubjects: ['Data Structures using C (DS)', 'DS Lab'],
-  },
-  {
-    id: 'fac_durga_prasad',
-    name: 'DR. K. DURGA PRASAD',
-    normalizedName: 'K DURGA PRASAD',
-    title: 'Associate Professor',
-    department: 'Department of Information Technology',
-    primarySubjects: ['Digital Electronics & Logic Design (DELD)', 'Mini Project', 'IOT Lab'],
-  },
-  {
-    id: 'fac_srividya',
-    name: 'MRS. M. SRIVIDYA',
-    normalizedName: 'M SRIVIDYA',
-    title: 'Assistant Professor',
-    department: 'Department of Information Technology',
-    primarySubjects: ['Principles of Programming Languages (PPL)', 'DS Lab', 'Project Work-I'],
-  },
-  {
-    id: 'fac_sirisha',
-    name: 'MRS. Y. SIRISHA',
-    normalizedName: 'Y SIRISHA',
-    title: 'Assistant Professor',
-    department: 'Department of Information Technology',
-    primarySubjects: ['Big Data Analytics (BDA)', 'OOAD (V IT-B)', 'OS Lab', 'Project Work-I'],
-  },
-  {
-    id: 'fac_mizna',
-    name: 'MS. MIZNA',
-    normalizedName: 'MIZNA',
-    title: 'Assistant Professor',
-    department: 'Department of Information Technology',
-    primarySubjects: ['Internet of Things (IOT)', 'FSD Lab', 'OS Lab'],
-  },
-  {
-    id: 'fac_shravya',
-    name: 'MRS. G. SHRAVYA',
-    normalizedName: 'G SHRAVYA',
-    title: 'Assistant Professor',
-    department: 'Department of Information Technology',
-    primarySubjects: ['Internet Of Things Lab (IOT LAB)', 'WT Lab', 'OS Lab'],
-  },
-  {
-    id: 'fac_akshara',
-    name: 'MS. G. AKSHARA',
-    normalizedName: 'G AKSHARA',
-    title: 'Assistant Professor',
-    department: 'Department of Information Technology',
-    primarySubjects: ['Software Engineering (SE V IT-A)', 'OS Lab'],
-  },
-  {
-    id: 'fac_deepa',
-    name: 'MRS. B. DEEPA',
-    normalizedName: 'B DEEPA',
-    title: 'Assistant Professor',
-    department: 'Department of Information Technology',
-    primarySubjects: ['Software Engineering (SE V IT-B)', 'AI Lab'],
-  },
-  {
-    id: 'fac_praveena',
-    name: 'MRS. B.J. PRAVEENA',
-    normalizedName: 'BJ PRAVEENA',
-    title: 'Assistant Professor',
-    department: 'Department of Information Technology',
-    primarySubjects: ['Block chain Technologies (BCT)'],
   },
   {
     id: 'fac_madhavi',
@@ -633,22 +697,6 @@ export const FACULTY_DIRECTORY: FacultyMember[] = [
     title: 'Assistant Professor (Management / S&H)',
     department: 'Science & Humanities / Management',
     primarySubjects: ['Finance and Accounting (FA)', 'Indian Constitution (IC)'],
-  },
-  {
-    id: 'fac_vijaya_laxmi',
-    name: 'MS. T. VIJAYA LAXMI',
-    normalizedName: 'T VIJAYA LAXMI',
-    title: 'Assistant Professor',
-    department: 'Department of Information Technology',
-    primarySubjects: ['Web Technologies Lab (WT LAB)'],
-  },
-  {
-    id: 'fac_nagalaxmi',
-    name: 'MS. J. NAGALAXMI',
-    normalizedName: 'J NAGALAXMI',
-    title: 'Assistant Professor',
-    department: 'Department of Information Technology',
-    primarySubjects: ['Web Technologies Lab (WT LAB)'],
   },
   {
     id: 'fac_koteswara',
@@ -724,6 +772,42 @@ export const FACULTY_DIRECTORY: FacultyMember[] = [
   },
 ];
 
+export const TRANSFERRED_FACULTY_NAMES = [
+  'Vikram',
+  'Mr. K. Vikram Reddy',
+  'BJ Praveena',
+  'Mrs. BJ. Praveena',
+  'Pushpa',
+  'Deepa',
+  'Mrs. B. Deepa',
+] as const;
+
+/**
+ * Checks if a faculty member has transferred out of the department (effective Sep 15, 2026)
+ */
+export function isFacultyTransferred(name: string): boolean {
+  if (!name) return false;
+  const upper = name.toUpperCase();
+  return (
+    upper.includes('VIKRAM') ||
+    upper.includes('PRAVEENA') ||
+    upper.includes('PUSHPA') ||
+    upper.includes('DEEPA')
+  );
+}
+
+/**
+ * Standardizes faculty name and corrects legacy/typo entries (e.g. Amith -> Samhith)
+ */
+export function standardizeFacultyName(name: string): string {
+  if (!name) return '';
+  const trimmed = name.trim();
+  if (trimmed.toLowerCase() === 'amith' || trimmed.toLowerCase() === 'mr. amith') {
+    return 'Mr. Samhith';
+  }
+  return trimmed;
+}
+
 // Helper to normalize strings for comparison
 function cleanStr(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -743,6 +827,22 @@ export function getFacultyDaySchedule(
   const targetClean = cleanStr(facultyName);
   if (!targetClean) return result;
 
+  // 1. Check Master Faculty Dataset (Official AY 2026-27 ODD Sem)
+  const prof = findFacultyProfile(facultyName);
+  if (prof && prof.schedule[dayOfWeek]) {
+    const daySched = prof.schedule[dayOfWeek];
+    const slots: (keyof DayScheduleEntry)[] = ['slot_1', 'slot_2', 'slot_3', 'slot_4', 'slot_5', 'slot_6'];
+    for (const slotKey of slots) {
+      const entry = daySched[slotKey as keyof typeof daySched];
+      if (entry) {
+        result[slotKey] = entry.fullDetail;
+        result.summary.push(`${slotKey.toUpperCase()}: ${entry.codeOrAbbr}`);
+      }
+    }
+    return result;
+  }
+
+  // 2. Fallback to CLASSES_TIMETABLE
   const slots: (keyof DayScheduleEntry)[] = ['slot_1', 'slot_2', 'slot_3', 'slot_4', 'slot_5', 'slot_6'];
 
   // Check each class
@@ -807,6 +907,29 @@ export function getFacultyDaySlotsDetailed(
   const targetClean = cleanStr(facultyName);
   if (!targetClean) return result;
 
+  // 1. Check Master Faculty Dataset (Official AY 2026-27 ODD Sem)
+  const prof = findFacultyProfile(facultyName);
+  if (prof && prof.schedule[dayOfWeek]) {
+    const daySched = prof.schedule[dayOfWeek];
+    const slots: (keyof DayScheduleEntry)[] = ['slot_1', 'slot_2', 'slot_3', 'slot_4', 'slot_5', 'slot_6'];
+    for (const slotKey of slots) {
+      const entry = daySched[slotKey as keyof typeof daySched];
+      if (entry) {
+        result[slotKey] = {
+          hasSchedule: true,
+          subjectName: entry.codeOrAbbr,
+          subjectAbbr: entry.codeOrAbbr,
+          code: entry.codeOrAbbr,
+          isLab: entry.isLab,
+          rawEntry: entry.codeOrAbbr,
+          fullDetail: entry.fullDetail,
+        };
+      }
+    }
+    return result;
+  }
+
+  // 2. Fallback to CLASSES_TIMETABLE
   const slots: (keyof DayScheduleEntry)[] = ['slot_1', 'slot_2', 'slot_3', 'slot_4', 'slot_5', 'slot_6'];
 
   for (const cls of CLASSES_TIMETABLE) {

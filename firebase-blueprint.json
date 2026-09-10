@@ -1,0 +1,63 @@
+{
+  "entities": {
+    "ActivityLog": {
+      "title": "ActivityLog",
+      "description": "Daily activity log submission for faculty or programmer",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique log identifier" },
+        "employeeName": { "type": "string", "description": "Name of the faculty or programmer" },
+        "role": { "type": "string", "enum": ["Faculty", "Programmer"] },
+        "date": { "type": "string", "description": "Log date in YYYY-MM-DD format" },
+        "department": { "type": "string", "description": "Academic department name" },
+        "activities": { "type": "object", "description": "Map of slot IDs to plain text activity summaries" },
+        "periodData": { "type": "object", "description": "Structured period details for courses, sections, units, topics" },
+        "savedAt": { "type": "string", "description": "ISO timestamp of submission" },
+        "totalFilledSlots": { "type": "number", "description": "Count of filled activity slots" },
+        "hodStatus": { "type": "string", "enum": ["Submitted", "Under Review", "Verified", "Approved", "Flagged"] },
+        "hodFeedback": { "type": "string", "description": "Optional HoD feedback" },
+        "sheetsSynced": { "type": "boolean", "description": "Whether log was synchronized to Google Sheets" },
+        "submittedBy": { "type": "string", "description": "Authenticated user email or identifier" }
+      },
+      "required": ["employeeName", "date", "role", "hodStatus"]
+    },
+    "DraftActivity": {
+      "title": "DraftActivity",
+      "description": "Per-day draft activities for faculty auto-saved during editing",
+      "type": "object",
+      "properties": {
+        "employeeName": { "type": "string", "description": "Faculty name" },
+        "date": { "type": "string", "description": "Target date YYYY-MM-DD" },
+        "activities": { "type": "object", "description": "Map of slot ID to draft text" },
+        "periodData": { "type": "object", "description": "Map of slot ID to structured period data" },
+        "updatedAt": { "type": "string", "description": "Last updated ISO string" }
+      },
+      "required": ["employeeName", "date"]
+    },
+    "AppSettings": {
+      "title": "AppSettings",
+      "description": "Departmental application settings and Google Sheets sync configuration",
+      "type": "object",
+      "properties": {
+        "sheetsWebAppUrl": { "type": "string", "description": "Google Apps Script Web App Deployment URL" },
+        "additionalAdminEmail": { "type": "string", "description": "Optional third HoD admin email" },
+        "updatedAt": { "type": "string", "description": "Timestamp of settings update" },
+        "updatedBy": { "type": "string", "description": "Email of admin who updated settings" }
+      }
+    }
+  },
+  "firestore": {
+    "/activity_logs/{logId}": {
+      "schema": "ActivityLog",
+      "description": "Collection of all submitted departmental activity logs"
+    },
+    "/drafts/{draftId}": {
+      "schema": "DraftActivity",
+      "description": "Draft activity data auto-saved during editing"
+    },
+    "/settings/{settingId}": {
+      "schema": "AppSettings",
+      "description": "Departmental application settings"
+    }
+  }
+}

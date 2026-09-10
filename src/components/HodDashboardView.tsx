@@ -4,6 +4,14 @@ import { BASE_TIME_SLOTS, getSlotTimeLabel } from '../constants';
 import { FACULTY_DIRECTORY } from '../timetableData';
 import { exportLogsToExcelCsv } from '../utils/googleSheets';
 import {
+  getAdditionalAdminEmail,
+  setAdditionalAdminEmail,
+  PRIMARY_HOD_EMAIL,
+  DEV_ADMIN_EMAIL,
+  ADMIN_EMAIL_2,
+  getAdminRole,
+} from '../utils/hodAuth';
+import {
   Users,
   CheckCircle2,
   Clock,
@@ -24,6 +32,12 @@ import {
   FileDown,
   Settings,
   CloudUpload,
+  Shield,
+  ShieldCheck,
+  LogOut,
+  Key,
+  Save,
+  UserCheck,
 } from 'lucide-react';
 
 interface HodDashboardViewProps {
@@ -39,6 +53,8 @@ interface HodDashboardViewProps {
   onOpenGoogleSheetsSettings?: () => void;
   onSyncLogToSheets?: (log: ActivityLog) => void;
   isGoogleSheetsConfigured?: boolean;
+  adminEmail?: string | null;
+  onLogoutHod?: () => void;
 }
 
 export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
@@ -50,6 +66,8 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
   onOpenGoogleSheetsSettings,
   onSyncLogToSheets,
   isGoogleSheetsConfigured = false,
+  adminEmail,
+  onLogoutHod,
 }) => {
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -64,6 +82,11 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
 
   // Editable remarks state: logId -> text
   const [remarksState, setRemarksState] = useState<Record<string, string>>({});
+
+  // Admin access slot state
+  const [isAdminSlotSettingsOpen, setIsAdminSlotSettingsOpen] = useState<boolean>(false);
+  const [slot3Email, setSlot3Email] = useState<string>(() => getAdditionalAdminEmail());
+  const [slotSaveFeedback, setSlotSaveFeedback] = useState<string | null>(null);
 
   // Active faculty total count
   const totalFacultyCount = FACULTY_DIRECTORY.length + 3; // including technical staff
@@ -129,10 +152,156 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
     onUpdateLogStatus(log.id, 'Needs Clarification', remark);
   };
 
+  const handleSaveSlot3Email = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = slot3Email.trim().toLowerCase();
+    setAdditionalAdminEmail(trimmed);
+    setSlotSaveFeedback(
+      trimmed
+        ? `Slot 3 administrator email successfully updated to "${trimmed}".`
+        : 'Slot 3 reset to open/unassigned.'
+    );
+    setTimeout(() => setSlotSaveFeedback(null), 3000);
+  };
+
   return (
     <div className="space-y-4">
       {/* Top HoD Status Header */}
       <div className="bg-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-sm border border-slate-800">
+        {/* Authenticated Admin Identity Strip */}
+        <div className="mb-3 pb-2.5 border-b border-slate-800 flex items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
+            <span className="text-slate-400 text-[11px] truncate">Admin Session:</span>
+            <span className="font-bold text-white text-[11px] font-mono truncate">
+              {adminEmail || PRIMARY_HOD_EMAIL}
+            </span>
+            {adminEmail && getAdminRole(adminEmail) && (
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wider ${
+                getAdminRole(adminEmail) === 'HoD'
+                  ? 'bg-blue-900/60 text-blue-200 border-blue-600/50'
+                  : getAdminRole(adminEmail) === 'Dev'
+                  ? 'bg-emerald-900/60 text-emerald-200 border-emerald-600/50'
+                  : 'bg-amber-900/60 text-amber-200 border-amber-600/50'
+              }`}>
+                {getAdminRole(adminEmail)}
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsAdminSlotSettingsOpen((prev) => !prev)}
+              className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-blue-300 hover:text-white rounded-lg text-[10px] font-semibold transition-colors inline-flex items-center gap-1 cursor-pointer border border-slate-700"
+              title="Manage Admin Email Access Slots"
+            >
+              <Key className="w-3 h-3 text-blue-400" />
+              <span>Admin Slots (3)</span>
+            </button>
+
+            {onLogoutHod && (
+              <button
+                type="button"
+                onClick={onLogoutHod}
+                className="px-2 py-1 bg-rose-950/60 hover:bg-rose-900 text-rose-300 hover:text-white rounded-lg text-[10px] font-semibold transition-colors inline-flex items-center gap-1 cursor-pointer border border-rose-800/40"
+                title="Log out of HoD Administrative Portal"
+              >
+                <LogOut className="w-3 h-3 text-rose-400" />
+                <span>Log Out</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Collapsible Admin Access Whitelist Panel */}
+        {isAdminSlotSettingsOpen && (
+          <div className="mb-3.5 p-3 rounded-xl bg-slate-850 border border-slate-750 text-xs space-y-2.5 animate-in fade-in duration-150">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-white text-xs flex items-center gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5 text-blue-400" />
+                <span>Authorized Admin Whitelist (Strict 3 Roles)</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsAdminSlotSettingsOpen(false)}
+                className="text-slate-400 hover:text-white text-[10px]"
+              >
+                Close
+              </button>
+            </div>
+
+            <p className="text-[11px] text-slate-300 leading-snug">
+              Access to this dashboard is strictly restricted to 3 authorized accounts verified via Firebase Authentication.
+              The 3rd slot (AHoD) is initialized and updated directly by the HoD within this panel and stored locally.
+            </p>
+
+            <div className="space-y-1.5 text-[11px]">
+              {/* Slot 1: HoD */}
+              <div className="p-2 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-slate-200 text-[10px]">HoD</span>
+                    <span className="text-slate-400 text-[10px]">• Head of Department (Official)</span>
+                  </div>
+                  <span className="font-mono font-bold text-blue-300">{PRIMARY_HOD_EMAIL}</span>
+                </div>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-semibold">
+                  Locked
+                </span>
+              </div>
+
+              {/* Slot 2: Dev */}
+              <div className="p-2 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-slate-200 text-[10px]">Dev</span>
+                    <span className="text-slate-400 text-[10px]">• Systems & Software Administrator</span>
+                  </div>
+                  <span className="font-mono font-bold text-emerald-300">{DEV_ADMIN_EMAIL}</span>
+                </div>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-semibold">
+                  Locked
+                </span>
+              </div>
+
+              {/* Slot 3: AHoD (Configurable by HoD) */}
+              <form onSubmit={handleSaveSlot3Email} className="p-2 rounded-lg bg-blue-950/40 border border-blue-800/60 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-blue-300 font-bold text-[10px]">AHoD</span>
+                    <span className="text-slate-300 text-[10px]">• Assistant Head of Department (Stored in localStorage)</span>
+                  </div>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-900 text-blue-200 font-bold">
+                    Editable
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="email"
+                    value={slot3Email}
+                    onChange={(e) => setSlot3Email(e.target.value)}
+                    placeholder="e.g. ahodit@matrusri.edu.in"
+                    className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-[11px] font-mono focus:border-blue-400 focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold text-[10px] transition-colors cursor-pointer inline-flex items-center gap-1 shrink-0"
+                  >
+                    <Save className="w-3 h-3" />
+                    <span>Save AHoD</span>
+                  </button>
+                </div>
+                {slotSaveFeedback && (
+                  <p className="text-[10px] text-emerald-300 font-medium animate-in fade-in">
+                    ✓ {slotSaveFeedback}
+                  </p>
+                )}
+              </form>
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center justify-between gap-2 mb-3">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-xl bg-blue-500/20 border border-blue-400/30 flex items-center justify-center text-blue-400">

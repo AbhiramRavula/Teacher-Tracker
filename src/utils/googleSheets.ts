@@ -56,14 +56,23 @@ export function setStoredSheetsUrl(url: string): void {
   }
 }
 
+import { PeriodSlotData } from '../types';
+import { formatPeriodSummary } from './draftStorage';
+
 /**
- * Build the exact payload required by the Google Sheets integration:
+ * Build the exact payload required by the departmental Google Sheets integration:
  * {
- *   "facultyName": "Mrs. Stvsav Ramya",
- *   "date": "2026-09-09",
+ *   "facultyName": "Dr. J. Srinivas",
+ *   "date": "2026-09-10",
  *   "logs": [
- *     { "slot": "09:40 AM - 10:40 AM", "activity": "Covered Operating Systems process scheduling" },
- *     { "slot": "10:40 AM - 11:40 AM", "activity": "Conducted OS Lab batch evaluations" }
+ *     {
+ *       "slot": "P1",
+ *       "section": "III A",
+ *       "courseName": "DS",
+ *       "credits": "3",
+ *       "unitNo": "2",
+ *       "topicName": "Stack using linked list"
+ *     }
  *   ]
  * }
  */
@@ -71,7 +80,8 @@ export function buildSheetsPayload(
   facultyName: string,
   date: string,
   activities: Record<string, string>,
-  role: Role
+  role: Role = 'Faculty',
+  periodData?: Record<string, PeriodSlotData>
 ): GoogleSheetsPayload {
   const logs: GoogleSheetsLogItem[] = [];
 
@@ -79,10 +89,36 @@ export function buildSheetsPayload(
     // Exclude lunch break and empty slots
     if (slot.isLunchBreak) return;
 
+    const struct = periodData?.[slot.id];
     const activityText = activities[slot.id];
-    if (activityText && activityText.trim().length > 0) {
+
+    const hasStructured = Boolean(
+      struct && (
+        (struct.topicName && struct.topicName.trim().length > 0) ||
+        (struct.courseName && struct.courseName.trim().length > 0)
+      )
+    );
+
+    const hasPlain = Boolean(activityText && activityText.trim().length > 0);
+
+    if (hasStructured && struct) {
       logs.push({
-        slot: getSlotTimeLabel(slot, role),
+        slot: struct.slot || slot.periodCode || slot.id.replace('slot_', 'P').toUpperCase(),
+        section: struct.section || 'III A',
+        courseName: struct.courseName || 'IT Subject',
+        credits: struct.credits || (slot.isClosingSlot ? '0' : '3'),
+        unitNo: struct.unitNo || '1',
+        topicName: struct.topicName || '',
+        activity: formatPeriodSummary(struct) || struct.topicName || '',
+      });
+    } else if (hasPlain && activityText) {
+      logs.push({
+        slot: slot.periodCode || slot.id.replace('slot_', 'P').toUpperCase(),
+        section: 'III A',
+        courseName: 'Class Duty',
+        credits: slot.isClosingSlot ? '0' : '3',
+        unitNo: '1',
+        topicName: activityText.trim(),
         activity: activityText.trim(),
       });
     }
@@ -177,10 +213,19 @@ export async function submitLogToGoogleSheets(
     return {
       success: false,
       message:
-        'This is a Google Sheet document link, not an Apps Script /exec URL. Use the "Direct Google Sign-In" option for plain Google Sheet URLs!',
+        'This is a Google Sheet document link, not an Apps Script /exec URL. Use the "Connect Plain Sheet" tab for plain Google Sheet URLs!',
     };
   }
 
+  if (cleanUrl.includes('/dev')) {
+    return {
+      success: false,
+      message:
+        'Your URL ends with /dev. Test /dev URLs require Google login and block external apps. Please deploy a Web App and use the URL ending with /exec.',
+    };
+  }
+
+  // Attempt 1: Standard fetch (supports reading JSON response)
   try {
     const response = await fetch(cleanUrl, {
       method: 'POST',
@@ -195,6 +240,13 @@ export async function submitLogToGoogleSheets(
       const text = await response.text();
       try {
         const json = JSON.parse(text);
+        if (json.status === 'error') {
+          return {
+            success: false,
+            message: `Google Apps Script returned an error: ${json.message || 'Unknown script error'}`,
+            details: json,
+          };
+        }
         return {
           success: true,
           message:
@@ -216,13 +268,98 @@ export async function submitLogToGoogleSheets(
       };
     }
   } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
+    // Attempt 2: Fallback with mode: 'no-cors'
+    // Browser CORS policies frequently block Google Apps Script 302 redirects even when the script executed.
+    // 'no-cors' mode allows the HTTP POST with payload to reach Google's server and execute doPost(e).
+    try {
+      await fetch(cleanUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      return {
+        success: true,
+        message: `Log dispatched to Google Sheet for tab "${payload.facultyName}"! (If rows do not appear, redeploy Apps Script with "Who has access: Anyone")`,
+      };
+    } catch (fallbackErr: unknown) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        message: `Failed to connect to Google Sheets Web App: ${errorMsg}. Please ensure 'Who has access' is set to 'Anyone' and redeploy as 'New version'.`,
+        details: fallbackErr,
+      };
+    }
+  }
+}
+
+/**
+ * Test connectivity to a Google Apps Script Web App URL
+ */
+export async function testAppsScriptEndpoint(
+  scriptUrl: string
+): Promise<{ success: boolean; message: string; suggestions?: string[] }> {
+  if (!scriptUrl || !scriptUrl.trim()) {
     return {
       success: false,
-      message: `Failed to connect to Google Sheets Web App: ${errorMsg}`,
-      details: err,
+      message: 'Please enter a Google Apps Script Web App URL first.',
     };
   }
+
+  const cleanUrl = scriptUrl.trim();
+
+  if (cleanUrl.includes('docs.google.com/spreadsheets')) {
+    return {
+      success: false,
+      message: 'This is a spreadsheet link, not an Apps Script URL. Use the "Connect Plain Sheet" tab instead.',
+    };
+  }
+
+  if (cleanUrl.includes('/dev')) {
+    return {
+      success: false,
+      message: 'Your URL ends in /dev. You must deploy a Web App and use the URL ending in /exec.',
+      suggestions: [
+        'In Apps Script, click Deploy > New deployment',
+        'Select Web app',
+        'Set "Who has access" to "Anyone"',
+        'Copy the URL ending in /exec',
+      ],
+    };
+  }
+
+  const testPayload: GoogleSheetsPayload = {
+    facultyName: 'Connection Test',
+    date: new Date().toISOString().split('T')[0],
+    logs: [
+      {
+        slot: 'Test Slot',
+        activity: 'Connectivity verification from Employee Activity Tracker',
+      },
+    ],
+  };
+
+  const result = await submitLogToGoogleSheets(cleanUrl, testPayload);
+  if (result.success) {
+    return {
+      success: true,
+      message: result.message,
+    };
+  }
+
+  return {
+    success: false,
+    message: result.message,
+    suggestions: [
+      'Did you redeploy as a "New version"? In Apps Script, click Deploy > Manage deployments > Edit (pencil) > Version: "New version" > Deploy.',
+      'Check "Who has access": It MUST be set to "Anyone" (not "Only myself").',
+      'Check "Execute as": It must be set to "Me".',
+      'Make sure you authorized permissions when deploying.',
+    ],
+  };
 }
 
 /**
@@ -331,10 +468,13 @@ function doPost(e) {
         "Timestamp",
         "Date",
         "Day of Week",
-        "Time Slot",
-        "Duty / Activity / Topics Covered",
-        "Submission Status",
-        "Device / Channel"
+        "Period Slot",
+        "Course Name",
+        "Section",
+        "Credits",
+        "Unit No",
+        "Topic / Activity",
+        "Submission Status"
       ];
 
       var headerRange = sheet.getRange(1, 1, 1, headers.length);
@@ -346,14 +486,16 @@ function doPost(e) {
       headerRange.setVerticalAlignment("middle");
       sheet.setRowHeight(1, 35);
 
-      // Set column widths
-      sheet.setColumnWidth(1, 175);
-      sheet.setColumnWidth(2, 110);
-      sheet.setColumnWidth(3, 110);
-      sheet.setColumnWidth(4, 185);
-      sheet.setColumnWidth(5, 450);
-      sheet.setColumnWidth(6, 140);
-      sheet.setColumnWidth(7, 160);
+      sheet.setColumnWidth(1, 160);
+      sheet.setColumnWidth(2, 100);
+      sheet.setColumnWidth(3, 100);
+      sheet.setColumnWidth(4, 90);
+      sheet.setColumnWidth(5, 120);
+      sheet.setColumnWidth(6, 90);
+      sheet.setColumnWidth(7, 70);
+      sheet.setColumnWidth(8, 70);
+      sheet.setColumnWidth(9, 360);
+      sheet.setColumnWidth(10, 110);
 
       sheet.setFrozenRows(1);
     }
@@ -362,16 +504,44 @@ function doPost(e) {
     var dayOfWeek = Utilities.formatDate(new Date(date + "T00:00:00"), Session.getScriptTimeZone(), "EEEE");
 
     var rowsToAdd = [];
+    var masterRowsToAdd = [];
+
     for (var i = 0; i < logs.length; i++) {
       var item = logs[i];
+      var slotCode = item.slot || "P" + (i + 1);
+      var course = item.courseName || item.course || "";
+      var section = item.section || "";
+      var credits = item.credits || "";
+      var unitNo = item.unitNo || item.unit || "";
+      var topic = item.topicName || item.activity || "";
+
+      // Faculty tab row
       rowsToAdd.push([
         Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss"),
         date,
         dayOfWeek,
-        item.slot || "Duty Slot",
-        item.activity || "",
-        "Submitted",
-        "Mobile Activity Tracker"
+        slotCode,
+        course,
+        section,
+        credits,
+        unitNo,
+        topic,
+        "Submitted"
+      ]);
+
+      // Consolidated Master_Daily_Report row
+      masterRowsToAdd.push([
+        Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss"),
+        facultyName,
+        date,
+        dayOfWeek,
+        slotCode,
+        course,
+        section,
+        credits,
+        unitNo,
+        topic,
+        "Submitted"
       ]);
     }
 
@@ -381,6 +551,38 @@ function doPost(e) {
       dataRange.setValues(rowsToAdd);
       dataRange.setVerticalAlignment("middle");
       dataRange.setWrap(true);
+
+      // Append to Master_Daily_Report
+      var masterSheet = ss.getSheetByName("Master_Daily_Report");
+      if (!masterSheet) {
+        masterSheet = ss.insertSheet("Master_Daily_Report", 0);
+        var mHeaders = [
+          "Timestamp",
+          "Faculty Name",
+          "Date",
+          "Day of Week",
+          "Period Slot",
+          "Course Name",
+          "Section",
+          "Credits",
+          "Unit No",
+          "Topic / Activity",
+          "Submission Status"
+        ];
+        var mHeaderRange = masterSheet.getRange(1, 1, 1, mHeaders.length);
+        mHeaderRange.setValues([mHeaders]);
+        mHeaderRange.setFontWeight("bold");
+        mHeaderRange.setBackground("#1E3A8A"); // Blue 900
+        mHeaderRange.setFontColor("#FFFFFF");
+        mHeaderRange.setHorizontalAlignment("center");
+        masterSheet.setRowHeight(1, 35);
+        masterSheet.setFrozenRows(1);
+      }
+      var mStartRow = masterSheet.getLastRow() + 1;
+      var mRange = masterSheet.getRange(mStartRow, 1, masterRowsToAdd.length, masterRowsToAdd[0].length);
+      mRange.setValues(masterRowsToAdd);
+      mRange.setVerticalAlignment("middle");
+      mRange.setWrap(true);
     }
 
     return createJsonResponse({

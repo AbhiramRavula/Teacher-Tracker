@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Search, X, User, Check, Sparkles, Building2, BookOpen } from 'lucide-react';
-import { FACULTY_DIRECTORY, FacultyMember } from '../timetableData';
+import { FACULTY_DIRECTORY, FacultyMember, isFacultyTransferred } from '../timetableData';
 
 interface MobileFacultySelectorProps {
   isOpen: boolean;
@@ -57,8 +57,14 @@ export const MobileFacultySelector: React.FC<MobileFacultySelectorProps> = ({
       );
     }
 
+    const normalizedQuery = searchQuery.toLowerCase().replace(/amith/g, 'samhith');
+
     return FACULTY_DIRECTORY.filter((faculty) => {
+      // Exclude transferred faculty completely (effective Sep 15, 2026)
+      if (isFacultyTransferred(faculty.name)) return false;
+
       const matchesSearch =
+        faculty.name.toLowerCase().includes(normalizedQuery) ||
         faculty.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         faculty.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         faculty.primarySubjects.some((s) => s.toLowerCase().includes(searchQuery.toLowerCase())) ||
@@ -199,6 +205,11 @@ export const MobileFacultySelector: React.FC<MobileFacultySelectorProps> = ({
                       {('isClassTeacherOf' in item && item.isClassTeacherOf) && (
                         <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-200">
                           {item.isClassTeacherOf}
+                        </span>
+                      )}
+                      {('workload' in item && item.workload) && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">
+                          Th: {item.workload.theory}, Lab: {item.workload.lab}{item.workload.crt ? `, CRT: ${item.workload.crt}` : ''} (Total: {item.workload.total}h)
                         </span>
                       )}
                     </div>

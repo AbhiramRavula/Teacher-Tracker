@@ -375,6 +375,25 @@ export const TimetableModal: React.FC<TimetableModalProps> = ({
                       <p className="text-[11px] text-blue-700 font-medium mt-0.5">{f.title}</p>
                       <p className="text-[10px] text-slate-400">{f.department}</p>
 
+                      {f.workload && (
+                        <div className="mt-1.5 flex items-center gap-1 flex-wrap text-[10px]">
+                          <span className="px-1.5 py-0.5 rounded font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            Th: {f.workload.theory}h
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                            Lab: {f.workload.lab}h
+                          </span>
+                          {f.workload.crt ? (
+                            <span className="px-1.5 py-0.5 rounded font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                              CRT: {f.workload.crt}h
+                            </span>
+                          ) : null}
+                          <span className="px-1.5 py-0.5 rounded font-bold bg-slate-100 text-slate-800">
+                            Total: {f.workload.total}h
+                          </span>
+                        </div>
+                      )}
+
                       {f.isClassTeacherOf && (
                         <div className="mt-2 text-[11px] bg-slate-50 p-1.5 rounded border border-slate-100 text-slate-600">
                           {f.isClassTeacherOf}

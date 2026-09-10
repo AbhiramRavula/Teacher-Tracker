@@ -31,6 +31,7 @@ import {
   fetchSpreadsheetMetadata,
   createNewActivitySpreadsheet,
   submitLogToGoogleSheets,
+  testAppsScriptEndpoint,
 } from '../utils/googleSheets';
 import { syncFacultyLogsDirectToGoogleSheet } from '../utils/googleSheetsApi';
 import {
@@ -80,6 +81,7 @@ export const GoogleSheetsSettingsModal: React.FC<GoogleSheetsSettingsModalProps>
   // Apps Script Web App fallback state
   const [appsScriptUrlInput, setAppsScriptUrlInput] = useState('');
   const [hasCopiedCode, setHasCopiedCode] = useState(false);
+  const [isTestingAppsScript, setIsTestingAppsScript] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -336,6 +338,45 @@ export const GoogleSheetsSettingsModal: React.FC<GoogleSheetsSettingsModalProps>
         : 'Apps Script Web App URL cleared.',
     });
     if (onConfigChanged) onConfigChanged();
+  };
+
+  // Test Apps Script connection
+  const handleTestAppsScript = async () => {
+    const trimmed = appsScriptUrlInput.trim();
+    if (!trimmed) {
+      setStatusFeedback({
+        type: 'error',
+        message: 'Please paste your Google Apps Script Web App URL first.',
+      });
+      return;
+    }
+
+    setIsTestingAppsScript(true);
+    setStatusFeedback(null);
+    try {
+      const res = await testAppsScriptEndpoint(trimmed);
+      if (res.success) {
+        setStoredSheetsUrl(trimmed);
+        setStatusFeedback({
+          type: 'success',
+          message: `Connected successfully! A test row was sent to your sheet tab.`,
+        });
+        if (onConfigChanged) onConfigChanged();
+      } else {
+        setStatusFeedback({
+          type: 'error',
+          message: res.message,
+        });
+      }
+    } catch (err: unknown) {
+      const errText = err instanceof Error ? err.message : String(err);
+      setStatusFeedback({
+        type: 'error',
+        message: `Connection test failed: ${errText}. Please check the redeployment instructions below.`,
+      });
+    } finally {
+      setIsTestingAppsScript(false);
+    }
   };
 
   const handleCopyCode = () => {
@@ -792,13 +833,13 @@ export const GoogleSheetsSettingsModal: React.FC<GoogleSheetsSettingsModalProps>
                   If your institution requires using an anonymous Apps Script Web App instead of Google Sign-In, paste the deployed Web App URL below:
                 </p>
 
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <input
                     type="url"
                     value={appsScriptUrlInput}
                     onChange={(e) => setAppsScriptUrlInput(e.target.value)}
                     placeholder="https://script.google.com/macros/s/.../exec"
-                    className="flex-1 px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                    className="flex-1 min-w-[200px] px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                   />
                   <button
                     type="button"
@@ -807,25 +848,75 @@ export const GoogleSheetsSettingsModal: React.FC<GoogleSheetsSettingsModalProps>
                   >
                     Save URL
                   </button>
+                  <button
+                    type="button"
+                    disabled={isTestingAppsScript || !appsScriptUrlInput.trim()}
+                    onClick={handleTestAppsScript}
+                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg transition-colors cursor-pointer disabled:opacity-50 shrink-0 inline-flex items-center gap-1.5"
+                  >
+                    {isTestingAppsScript ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Send className="w-3.5 h-3.5" />
+                    )}
+                    <span>Test Connection</span>
+                  </button>
                 </div>
 
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-[11px] text-amber-800">
-                  ⚠️ <strong>Important:</strong> Do NOT paste a <code>docs.google.com/spreadsheets</code> link here. This field is only for deployed Apps Script <code>/exec</code> URLs. For plain Google Sheets, use the first tab <strong>&ldquo;Connect Plain Sheet&rdquo;</strong>!
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-[11px] text-amber-900 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                    <span>Seeing &ldquo;Failed to connect&rdquo;? Yes, you need to Redeploy!</span>
+                  </div>
+                  <p className="text-slate-700 leading-normal">
+                    In Google Apps Script, editing code <strong>does NOT update</strong> an active Web App until you deploy a <strong>&ldquo;New version&rdquo;</strong>.
+                  </p>
                 </div>
               </div>
 
-              {/* Instructions list */}
-              <div className="border border-slate-200 rounded-xl p-3.5 space-y-2 text-[11px] text-slate-600">
-                <h4 className="font-bold text-slate-900">How to deploy Google Apps Script:</h4>
-                <ol className="list-decimal list-inside space-y-1">
-                  <li>In your Google Sheet, click <strong>Extensions &gt; Apps Script</strong>.</li>
-                  <li>Click <strong>Copy Script Code</strong> above and paste it, replacing everything.</li>
-                  <li>Click <strong>Deploy &gt; New deployment</strong>.</li>
-                  <li>Select type: <strong>Web app</strong>.</li>
-                  <li>Set <em>Execute as</em>: <strong>Me</strong>.</li>
-                  <li>Set <em>Who has access</em>: <strong>Anyone</strong>.</li>
-                  <li>Click <strong>Deploy</strong> and paste the Web app URL here.</li>
-                </ol>
+              {/* Crucial Redeploy Checklist */}
+              <div className="bg-rose-50/70 border border-rose-200 rounded-xl p-3.5 space-y-2 text-[11px]">
+                <div className="flex items-center gap-2 font-bold text-rose-950">
+                  <RefreshCw className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>How to Update &amp; Redeploy (Fix &ldquo;Failed to connect&rdquo;)</span>
+                </div>
+                <div className="space-y-1.5 text-slate-700">
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-bold text-rose-700 shrink-0">Step 1:</span>
+                    <span>In your Google Sheet, open <strong>Extensions &gt; Apps Script</strong>. Make sure you pasted the code from <strong>&ldquo;Copy Script Code&rdquo;</strong> above.</span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-bold text-rose-700 shrink-0">Step 2:</span>
+                    <span>Click <strong>Deploy</strong> at the top right, then select <strong>Manage deployments</strong>.</span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-bold text-rose-700 shrink-0">Step 3:</span>
+                    <span>Click the <strong>Pencil icon (Edit)</strong> next to your active Web app deployment.</span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-bold text-rose-700 shrink-0">Step 4:</span>
+                    <span>Under <strong>Version</strong>, choose <strong>&ldquo;New version&rdquo;</strong>. <em>(Very Important: Apps Script will not update if you leave it on the old version!)</em></span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-bold text-rose-700 shrink-0">Step 5:</span>
+                    <span>Verify <strong>&ldquo;Who has access&rdquo;</strong> is set to <strong>&ldquo;Anyone&rdquo;</strong> (If set to &ldquo;Only myself&rdquo;, Google will block requests with &ldquo;Failed to connect&rdquo;!).</span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-bold text-rose-700 shrink-0">Step 6:</span>
+                    <span>Click <strong>Deploy</strong>. Copy the URL ending in <code>/exec</code>, paste it above, and click <strong>Test Connection</strong>.</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Alternative tip */}
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-[11px] text-emerald-900 flex items-start gap-2">
+                <Sparkles className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold block">Prefer not dealing with Apps Script deployments?</span>
+                  <span>
+                    Use the first tab <strong>&ldquo;Connect Plain Sheet (Easiest)&rdquo;</strong>. Just sign in with your Google account and paste your regular spreadsheet link — no script code, no deployments, and no permissions hurdles needed!
+                  </span>
+                </div>
               </div>
             </div>
           )}

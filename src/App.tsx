@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Role, ActivityLog } from './types';
+import { Role, ActivityLog, PeriodSlotData } from './types';
 import { BASE_TIME_SLOTS, STORAGE_KEY, getSlotTimeLabel } from './constants';
 import {
   FACULTY_DIRECTORY,
@@ -16,6 +16,21 @@ import { HodReportModal } from './components/HodReportModal';
 import { HodReportDocument } from './components/HodReportDocument';
 import { TimetableModal } from './components/TimetableModal';
 import { GoogleSheetsSettingsModal } from './components/GoogleSheetsSettingsModal';
+import { HodAuthModal } from './components/HodAuthModal';
+import {
+  saveSlotDraft,
+  loadDraftsForEmployeeAndDate,
+  clearDraftsForEmployeeAndDate,
+  saveStructuredSlotDraft,
+  loadStructuredDraftsForEmployeeAndDate,
+  formatPeriodSummary,
+} from './utils/draftStorage';
+import {
+  getStoredHodAuthEmail,
+  setStoredHodAuthEmail,
+  isEmailAuthorized,
+  PRIMARY_HOD_EMAIL,
+} from './utils/hodAuth';
 import {
   getStoredSheetsUrl,
   submitLogToGoogleSheets,
@@ -24,6 +39,10 @@ import {
   getStoredSpreadsheetId,
   getStoredSpreadsheetTitle,
 } from './utils/googleSheets';
+import {
+  subscribeToAuth,
+  signOutCurrentUser,
+} from './firebase';
 import {
   Save,
   Printer,
@@ -47,6 +66,7 @@ import {
   Loader2,
   CloudUpload,
   ExternalLink,
+  ShieldCheck,
 } from 'lucide-react';
 
 export default function App() {
@@ -68,8 +88,22 @@ export default function App() {
   const [date, setDate] = useState<string>(todayStr);
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>(initialDayOfWeek);
   const [department, setDepartment] = useState<string>(DEFAULT_FACULTY_SAMPLE_ACTIVITY.department);
-  const [activities, setActivities] = useState<Record<string, string>>(DEFAULT_FACULTY_SAMPLE_ACTIVITY.activities);
+  const [activities, setActivities] = useState<Record<string, string>>(() => {
+    const drafts = loadDraftsForEmployeeAndDate(DEFAULT_FACULTY_SAMPLE_ACTIVITY.employeeName, todayStr);
+    if (Object.keys(drafts).length > 0) {
+      return drafts;
+    }
+    return DEFAULT_FACULTY_SAMPLE_ACTIVITY.activities;
+  });
+  const [periodData, setPeriodData] = useState<Record<string, PeriodSlotData>>(() => {
+    return loadStructuredDraftsForEmployeeAndDate(DEFAULT_FACULTY_SAMPLE_ACTIVITY.employeeName, todayStr);
+  });
   const [formError, setFormError] = useState<string>('');
+
+  // HoD & Admin Authentication state
+  const [hodAdminEmail, setHodAdminEmail] = useState<string | null>(() => getStoredHodAuthEmail());
+  const [isHodAuthModalOpen, setIsHodAuthModalOpen] = useState<boolean>(false);
+  const [pendingAdminAction, setPendingAdminAction] = useState<'hod_tab' | 'sheets_config' | null>(null);
 
   // Modals
   const [isFacultySelectorOpen, setIsFacultySelectorOpen] = useState<boolean>(false);
@@ -127,6 +161,24 @@ export default function App() {
     }
   }, [logs]);
 
+  // Listen to Firebase Auth state for HoD / Admin verification
+  useEffect(() => {
+    const unsubAuth = subscribeToAuth((user) => {
+      if (user?.email) {
+        if (isEmailAuthorized(user.email)) {
+          setStoredHodAuthEmail(user.email);
+          setHodAdminEmail(user.email);
+        } else {
+          // Immediately sign out unauthorized account
+          signOutCurrentUser().catch(() => {});
+          setStoredHodAuthEmail(null);
+          setHodAdminEmail(null);
+        }
+      }
+    });
+    return () => unsubAuth();
+  }, []);
+
   // Toast timeout
   useEffect(() => {
     if (toastMessage) {
@@ -144,6 +196,110 @@ export default function App() {
       setDepartment('Department of Information Technology');
     }
     setFormError('');
+
+    // Strictly separate logs by selected date and faculty:
+    // Check if there are draft activities already saved for this faculty on this date
+    const existingDrafts = loadDraftsForEmployeeAndDate(name, date);
+    const existingStructDrafts = loadStructuredDraftsForEmployeeAndDate(name, date);
+    setPeriodData(existingStructDrafts);
+
+    if (Object.keys(existingDrafts).length > 0 || Object.keys(existingStructDrafts).length > 0) {
+      setActivities(existingDrafts);
+      setToastMessage({
+        text: `Restored saved draft activities for ${name} on ${date}.`,
+        type: 'info',
+      });
+      return;
+    }
+
+    // If no draft saved yet for this date, auto-populate scheduled periods from the master timetable
+    if (role === 'Faculty') {
+      const daySlots = getFacultyDaySlotsDetailed(name, selectedDay);
+      const newActs: Record<string, string> = {};
+      const newStruct: Record<string, PeriodSlotData> = {};
+      let filledCount = 0;
+
+      (['slot_1', 'slot_2', 'slot_3', 'slot_4', 'slot_5', 'slot_6'] as const).forEach((sKey) => {
+        const detail = daySlots[sKey];
+        if (detail && detail.fullDetail) {
+          newActs[sKey] = detail.fullDetail;
+          saveSlotDraft(name, date, sKey, detail.fullDetail);
+
+          const structItem: PeriodSlotData = {
+            slot: sKey.replace('slot_', 'P').toUpperCase(),
+            courseName: detail.subjectAbbr || detail.subjectName || '',
+            section: detail.section || 'III A',
+            credits: detail.isLab ? '1' : '3',
+            unitNo: '1',
+            topicName: '',
+            classHour: detail.roomNo ? `Room ${detail.roomNo}` : '',
+          };
+          newStruct[sKey] = structItem;
+          saveStructuredSlotDraft(name, date, sKey, structItem);
+          filledCount++;
+        }
+      });
+      if (filledCount > 0) {
+        const closingText = 'Class register attendance updated, verified lab records, and submitted daily sign-off.';
+        newActs['slot_closing'] = closingText;
+        saveSlotDraft(name, date, 'slot_closing', closingText);
+
+        const closingStruct: PeriodSlotData = {
+          slot: 'Closing',
+          courseName: 'Department Sign-off',
+          section: 'IT Dept',
+          credits: '0',
+          unitNo: '0',
+          topicName: closingText,
+          classHour: 'Closing Duty',
+        };
+        newStruct['slot_closing'] = closingStruct;
+        saveStructuredSlotDraft(name, date, 'slot_closing', closingStruct);
+
+        setActivities(newActs);
+        setPeriodData(newStruct);
+        setToastMessage({
+          text: `Loaded ${name}'s schedule: ${filledCount} classes auto-filled for ${selectedDay}!`,
+          type: 'success',
+        });
+      } else {
+        setActivities({});
+        setPeriodData({});
+      }
+    } else {
+      setActivities({});
+      setPeriodData({});
+    }
+  };
+
+  // Handle duty date change with strict date isolation
+  const handleDateChange = (newDate: string) => {
+    setDate(newDate);
+
+    // Sync day of week based on newDate
+    if (newDate) {
+      const parts = newDate.split('-');
+      if (parts.length === 3) {
+        const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+        const map: DayOfWeek[] = ['MON', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+        const dow = map[d.getDay()] || 'MON';
+        setSelectedDay(dow);
+      }
+    }
+
+    // Separate logs strictly by selected date (YYYY-MM-DD)
+    // Changing date loads ONLY drafts specifically saved for that date
+    const dateDrafts = loadDraftsForEmployeeAndDate(employeeName, newDate);
+    const dateStructDrafts = loadStructuredDraftsForEmployeeAndDate(employeeName, newDate);
+    setActivities(dateDrafts);
+    setPeriodData(dateStructDrafts);
+
+    if (Object.keys(dateDrafts).length > 0 || Object.keys(dateStructDrafts).length > 0) {
+      setToastMessage({
+        text: `Loaded saved activities for ${newDate}.`,
+        type: 'info',
+      });
+    }
   };
 
   // Detailed timetable slot mappings for currently selected faculty and day
@@ -175,11 +331,22 @@ export default function App() {
     return counts;
   }, [employeeName, role]);
 
+  // Real-time slot text change with instant localStorage persistence
   const handleActivityChange = (slotId: string, val: string) => {
     setActivities((prev) => ({
       ...prev,
       [slotId]: val,
     }));
+    // Real-time persistence keyed strictly by facultyName + date + slot
+    saveSlotDraft(employeeName, date, slotId, val);
+  };
+
+  const handlePeriodDataChange = (slotId: string, data: PeriodSlotData) => {
+    setPeriodData((prev) => ({
+      ...prev,
+      [slotId]: data,
+    }));
+    saveStructuredSlotDraft(employeeName, date, slotId, data);
   };
 
   const handleApplyScheduleHint = (slotId: string, hint: string) => {
@@ -187,6 +354,7 @@ export default function App() {
       ...prev,
       [slotId]: hint,
     }));
+    saveSlotDraft(employeeName, date, slotId, hint);
     setToastMessage({
       text: `Timetable class filled into slot!`,
       type: 'info',
@@ -201,15 +369,18 @@ export default function App() {
       const detail = scheduleSlotsDetailed[sKey];
       if (detail && detail.fullDetail) {
         newActs[sKey] = detail.fullDetail;
+        saveSlotDraft(employeeName, date, sKey, detail.fullDetail);
         filledCount++;
       }
     });
 
-    if (role === 'Faculty') {
-      newActs['slot_closing'] = 'Class register attendance updated, verified lab records, and submitted daily sign-off.';
-    } else {
-      newActs['slot_closing'] = 'Lab systems health check completed, servers safely backed up, and power safely shutdown.';
-    }
+    const closingText =
+      role === 'Faculty'
+        ? 'Class register attendance updated, verified lab records, and submitted daily sign-off.'
+        : 'Lab systems health check completed, servers safely backed up, and power safely shutdown (closing 05:30 PM).';
+
+    newActs['slot_closing'] = closingText;
+    saveSlotDraft(employeeName, date, 'slot_closing', closingText);
 
     setActivities(newActs);
     setToastMessage({
@@ -218,10 +389,81 @@ export default function App() {
     });
   };
 
+  // Reset inputs and clear drafts for this employee + date
+  const handleResetCurrentActivities = () => {
+    if (window.confirm(`Clear draft activities for ${employeeName} on ${date}?`)) {
+      setActivities({});
+      setPeriodData({});
+      clearDraftsForEmployeeAndDate(employeeName, date);
+      setToastMessage({
+        text: `Cleared draft activities for ${date}.`,
+        type: 'info',
+      });
+    }
+  };
+
+  // HoD Authentication Handlers
+  const handleSwitchToHodTab = () => {
+    const authed = getStoredHodAuthEmail();
+    if (authed && isEmailAuthorized(authed)) {
+      setHodAdminEmail(authed);
+      setActiveTab('hod');
+    } else {
+      setPendingAdminAction('hod_tab');
+      setIsHodAuthModalOpen(true);
+    }
+  };
+
+  const handleOpenSheetsConfig = () => {
+    const authed = getStoredHodAuthEmail();
+    if (authed && isEmailAuthorized(authed)) {
+      setHodAdminEmail(authed);
+      setIsSheetsModalOpen(true);
+    } else {
+      setPendingAdminAction('sheets_config');
+      setIsHodAuthModalOpen(true);
+    }
+  };
+
+  const handleHodLoginSuccess = (email: string) => {
+    setStoredHodAuthEmail(email);
+    setHodAdminEmail(email);
+    setIsHodAuthModalOpen(false);
+    if (pendingAdminAction === 'sheets_config') {
+      setIsSheetsModalOpen(true);
+      setToastMessage({
+        text: `Authorized session: ${email}. Opening Google Sheets configuration.`,
+        type: 'success',
+      });
+    } else {
+      setActiveTab('hod');
+      setToastMessage({
+        text: `Welcome! Authorized HoD session: ${email}`,
+        type: 'success',
+      });
+    }
+    setPendingAdminAction(null);
+  };
+
+  const handleHodLogout = () => {
+    signOutCurrentUser().catch((err) => console.warn('Firebase sign out note:', err));
+    setStoredHodAuthEmail(null);
+    setHodAdminEmail(null);
+    setActiveTab('tracker');
+    setToastMessage({
+      text: 'HoD administrative session logged out.',
+      type: 'info',
+    });
+  };
+
   // Count filled slots (excluding lunch)
-  const filledSlotsCount = BASE_TIME_SLOTS.filter(
-    (slot) => !slot.isLunchBreak && activities[slot.id] && activities[slot.id].trim().length > 0
-  ).length;
+  const filledSlotsCount = BASE_TIME_SLOTS.filter((slot) => {
+    if (slot.isLunchBreak) return false;
+    const hasPlain = Boolean(activities[slot.id] && activities[slot.id].trim().length > 0);
+    const pData = periodData[slot.id];
+    const hasStruct = Boolean(pData && (pData.topicName?.trim() || pData.courseName?.trim()));
+    return hasPlain || hasStruct;
+  }).length;
 
   // Build current log object
   const getCurrentLogObject = (): ActivityLog => {
@@ -232,9 +474,10 @@ export default function App() {
       date,
       department: department.trim() || 'Department of Information Technology',
       activities: { ...activities },
+      periodData: { ...periodData },
       savedAt: new Date().toISOString(),
       totalFilledSlots: filledSlotsCount,
-      hodStatus: 'Under Review',
+      hodStatus: 'Submitted',
     };
   };
 
@@ -254,9 +497,10 @@ export default function App() {
       date,
       department: department.trim() || 'Department of Information Technology',
       activities: { ...activities },
+      periodData: { ...periodData },
       savedAt: new Date().toISOString(),
       totalFilledSlots: filledSlotsCount,
-      hodStatus: 'Under Review',
+      hodStatus: 'Submitted',
       sheetsSynced: false,
     };
 
@@ -267,7 +511,7 @@ export default function App() {
     });
   };
 
-  // Submit Today's Log to Google Sheets via Apps Script Web App URL and save locally
+  // Submit Today's Log directly to Google Sheets via Apps Script Web App URL and save locally
   const handleSubmitTodaysLog = async () => {
     if (!employeeName.trim()) {
       setFormError('Please select or enter the staff member name.');
@@ -285,16 +529,8 @@ export default function App() {
       return;
     }
 
-    // Compile payload according to user specification:
-    // {
-    //   "facultyName": "Mrs. Stvsav Ramya",
-    //   "date": "2026-09-09",
-    //   "logs": [
-    //     { "slot": "09:40 AM - 10:40 AM", "activity": "Covered Operating Systems process scheduling" },
-    //     { "slot": "10:40 AM - 11:40 AM", "activity": "Conducted OS Lab batch evaluations" }
-    //   ]
-    // }
-    const payload = buildSheetsPayload(employeeName, date, activities, role);
+    // Compile payload according to user specification
+    const payload = buildSheetsPayload(employeeName, date, activities, role, periodData);
 
     const newLogId = 'log_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
     const newLog: ActivityLog = {
@@ -304,9 +540,10 @@ export default function App() {
       date,
       department: department.trim() || 'Department of Information Technology',
       activities: { ...activities },
+      periodData: { ...periodData },
       savedAt: new Date().toISOString(),
       totalFilledSlots: filledSlotsCount,
-      hodStatus: 'Under Review',
+      hodStatus: 'Submitted',
       sheetsSynced: false,
     };
 
@@ -316,14 +553,14 @@ export default function App() {
     if (!isConfigured) {
       setLogs((prev) => [newLog, ...prev]);
       setToastMessage({
-        text: `Log saved locally! Connect your Google Sheet to sync faculty tabs directly.`,
+        text: `Log saved locally with status "Submitted"! Connect your Google Sheet to sync faculty tabs directly.`,
         type: 'info',
       });
       setIsSheetsModalOpen(true);
       return;
     }
 
-    // Dispatches log via Direct Google Sheets API v4 or Apps Script Web App
+    // Dispatches log via Direct Google Sheets API v4 or Apps Script Web App directly without approval gate
     setIsSubmittingToSheets(true);
     setToastMessage({
       text: `Syncing activity log to Google Sheet for ${employeeName.trim()}...`,
@@ -342,14 +579,14 @@ export default function App() {
 
       if (result.success) {
         setToastMessage({
-          text: result.message || `Submitted to Google Sheet tab "${employeeName.trim()}"!`,
+          text: result.message || `Submitted directly to Google Sheet tab "${employeeName.trim()}"!`,
           type: 'success',
           link: result.spreadsheetUrl,
           linkText: 'Open in Sheets',
         });
       } else {
         setToastMessage({
-          text: `Saved locally. Google Sheets: ${result.message}`,
+          text: `Saved locally as Submitted. Google Sheets: ${result.message}`,
           type: 'info',
         });
         if (result.method === 'none') {
@@ -360,7 +597,7 @@ export default function App() {
       setLogs((prev) => [newLog, ...prev]);
       const errorMsg = err instanceof Error ? err.message : String(err);
       setToastMessage({
-        text: `Saved locally. Note: ${errorMsg}`,
+        text: `Saved locally as Submitted. Note: ${errorMsg}`,
         type: 'info',
       });
     } finally {
@@ -499,14 +736,22 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-1.5">
+              <div
+                className="hidden xs:inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-sky-300 bg-slate-800/90 border border-sky-500/40 rounded-lg"
+                title="Firebase Authentication Active for Admin Access Verification"
+              >
+                <ShieldCheck className="w-3 h-3 text-sky-400" />
+                <span>Firebase Auth</span>
+              </div>
+
               <button
-                onClick={() => setIsSheetsModalOpen(true)}
+                onClick={handleOpenSheetsConfig}
                 className={`px-2.5 py-1 text-[11px] font-semibold border rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1 ${
                   isGoogleSheetsConfigured
                     ? 'text-emerald-300 hover:text-white bg-slate-800 hover:bg-slate-700 border-emerald-500/40'
                     : 'text-amber-300 hover:text-white bg-slate-800 hover:bg-slate-700 border-amber-500/40'
                 }`}
-                title="Configure Google Sheets Live Sync"
+                title="Configure Google Sheets Live Sync (Authorized Admin Only)"
               >
                 <FileSpreadsheet className="w-3 h-3 text-emerald-400" />
                 <span>Sheets</span>
@@ -545,15 +790,23 @@ export default function App() {
 
             <button
               id="tab-hod-dashboard"
-              onClick={() => setActiveTab('hod')}
+              onClick={handleSwitchToHodTab}
               className={`min-h-[44px] rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer relative ${
                 activeTab === 'hod'
                   ? 'bg-blue-600 text-white shadow-xs'
                   : 'text-slate-400 hover:text-white hover:bg-slate-900'
               }`}
+              title={hodAdminEmail ? `Authorized: ${hodAdminEmail}` : 'Restricted Admin Access'}
             >
               <FileCheck2 className="w-4 h-4" />
               <span>HoD Dashboard</span>
+              {hodAdminEmail ? (
+                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+              ) : (
+                <span className="text-[10px] px-1 py-0.2 bg-slate-800 text-amber-300 rounded border border-amber-400/30">
+                  Lock
+                </span>
+              )}
               {todaySubmittedCount > 0 && (
                 <span className="w-5 h-5 rounded-full bg-emerald-500 text-white text-[10px] font-bold flex items-center justify-center ml-0.5">
                   {todaySubmittedCount}
@@ -687,11 +940,23 @@ export default function App() {
                   <input
                     type="date"
                     value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                    className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-blue-100 focus:outline-none"
+                    onChange={(e) => handleDateChange(e.target.value)}
+                    className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-blue-100 focus:outline-none cursor-pointer"
                   />
                 </div>
               </section>
+
+              {/* Programmer Timing Notice Banner */}
+              {role === 'Programmer' && (
+                <div className="flex items-center justify-between bg-emerald-50/90 border border-emerald-200 rounded-xl p-2.5 text-xs text-emerald-900">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-emerald-700 shrink-0" />
+                    <span className="font-medium text-[11px] leading-tight">
+                      <strong>Programmer Duty Timings:</strong> Final closing slot extends to <strong>05:30 PM</strong> (04:20 PM – 05:30 PM) for lab maintenance and server backups.
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Day Selector (Mon - Sat) */}
               <section>
@@ -739,6 +1004,8 @@ export default function App() {
                     slot={slot}
                     role={role}
                     value={activities[slot.id] || ''}
+                    periodData={periodData[slot.id]}
+                    onPeriodDataChange={(pData) => handlePeriodDataChange(slot.id, pData)}
                     onChange={(val) => handleActivityChange(slot.id, val)}
                     index={idx}
                     scheduleDetail={scheduleSlotsDetailed[slot.id]}
@@ -747,15 +1014,58 @@ export default function App() {
                 ))}
               </section>
 
+              {/* Complete Log Submission Primary Banner */}
+              <section className="bg-gradient-to-r from-emerald-600 to-teal-700 rounded-2xl p-4 text-white shadow-md space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-white/15 flex items-center justify-center">
+                      <Send className="w-4 h-4 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold leading-tight">Ready to Submit?</h3>
+                      <p className="text-[11px] text-emerald-100">
+                        {filledSlotsCount}/7 slots completed for {date}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-[11px] bg-white/20 px-2 py-0.5 rounded-full font-semibold">
+                    Real-Time Saved
+                  </span>
+                </div>
+
+                <p className="text-[11px] text-emerald-50 leading-relaxed">
+                  Inputs are continuously saved to this device. Submitting will package all filled slots and push the record to your Google Sheet and the HoD review queue.
+                </p>
+
+                <button
+                  type="button"
+                  disabled={isSubmittingToSheets}
+                  onClick={handleSubmitTodaysLog}
+                  className="w-full py-3 bg-white hover:bg-emerald-50 text-emerald-950 font-extrabold text-xs rounded-xl transition-all shadow-md active:scale-98 cursor-pointer flex items-center justify-center gap-2 disabled:opacity-70"
+                >
+                  {isSubmittingToSheets ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-emerald-700" />
+                      <span>Transmitting Log to Sheet...</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
+                      <span>Submit Today&apos;s Complete Log</span>
+                    </>
+                  )}
+                </button>
+              </section>
+
               {/* Saved History for this Employee */}
-              <section className="mt-6 bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs space-y-3">
+              <section className="mt-4 bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs space-y-3">
                 <div className="flex items-center justify-between text-xs font-bold text-slate-800">
                   <span className="flex items-center gap-1.5 uppercase tracking-wide">
                     <History className="w-3.5 h-3.5 text-blue-600" />
                     Recent Submissions ({logs.length})
                   </span>
                   <button
-                    onClick={() => setActiveTab('hod')}
+                    onClick={handleSwitchToHodTab}
                     className="text-blue-600 hover:text-blue-700 text-xs font-semibold inline-flex items-center gap-0.5 cursor-pointer"
                   >
                     <span>HoD View</span>
@@ -798,10 +1108,41 @@ export default function App() {
                 </div>
               </section>
             </>
+          ) : !hodAdminEmail ? (
+            /* HoD Protected Access Gate */
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm text-center space-y-4 my-8">
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600">
+                <FileCheck2 className="w-7 h-7" />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-slate-900">HoD & Administrator Access</h2>
+                <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
+                  Access to departmental approvals, verification, and print rosters is restricted to verified administrators.
+                </p>
+              </div>
+              <div className="pt-2 flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsHodAuthModalOpen(true)}
+                  className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
+                >
+                  Verify Administrator Email
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('tracker')}
+                  className="w-full py-2 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-xl transition-colors cursor-pointer"
+                >
+                  Back to Faculty Portal
+                </button>
+              </div>
+            </div>
           ) : (
             /* HoD Dashboard View */
             <HodDashboardView
               logs={logs}
+              adminEmail={hodAdminEmail}
+              onLogoutHod={handleHodLogout}
               onUpdateLogStatus={handleUpdateLogStatus}
               onPrintLog={handlePrintIndividualLog}
               onPrintDailySummary={handlePrintDailySummary}
@@ -820,14 +1161,9 @@ export default function App() {
               {/* Reset entries button */}
               <button
                 type="button"
-                onClick={() => {
-                  if (confirm('Clear current inputs?')) {
-                    setActivities({});
-                    setToastMessage({ text: 'Inputs reset.', type: 'info' });
-                  }
-                }}
+                onClick={handleResetCurrentActivities}
                 className="w-11 h-11 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 transition-colors cursor-pointer shrink-0"
-                title="Reset activities"
+                title="Reset draft activities for this date"
               >
                 <RotateCcw className="w-4 h-4" />
               </button>
@@ -950,6 +1286,13 @@ export default function App() {
               type: 'success',
             });
           }}
+        />
+
+        {/* HoD Admin Authentication Gate Modal */}
+        <HodAuthModal
+          isOpen={isHodAuthModalOpen}
+          onClose={() => setIsHodAuthModalOpen(false)}
+          onSuccessLogin={handleHodLoginSuccess}
         />
 
         {/* HoD Printable Modal Preview */}
