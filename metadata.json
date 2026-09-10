@@ -1,0 +1,6 @@
+{
+  "name": "Employee Daily Activity Tracker",
+  "description": "A single-page employee daily activity tracker with integrated academic timetable database, dynamic role-based time slots, Google Sheets spreadsheet synchronization per faculty member, and HoD administrative review dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
