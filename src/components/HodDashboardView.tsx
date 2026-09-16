@@ -2,7 +2,8 @@ import React, { useState, useMemo } from 'react';
 import { ActivityLog } from '../types';
 import { BASE_TIME_SLOTS, getSlotTimeLabel } from '../constants';
 import { FACULTY_DIRECTORY } from '../timetableData';
-import { exportLogsToExcelCsv } from '../utils/googleSheets';
+import { exportLogsToExcelCsv, exportMultiTabGrandExcel } from '../utils/googleSheets';
+import { GrandReportPreviewModal } from './GrandReportPreviewModal';
 import {
   getAdditionalAdminEmail,
   setAdditionalAdminEmail,
@@ -88,6 +89,9 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
   const [slot3Email, setSlot3Email] = useState<string>(() => getAdditionalAdminEmail());
   const [slotSaveFeedback, setSlotSaveFeedback] = useState<string | null>(null);
 
+  // Grand Report Modal state
+  const [isGrandReportModalOpen, setIsGrandReportModalOpen] = useState<boolean>(false);
+
   // Active faculty total count
   const totalFacultyCount = FACULTY_DIRECTORY.length + 3; // including technical staff
 
@@ -135,6 +139,7 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
   const todayLogs = useMemo(() => logs.filter((l) => l.date === todayStr), [logs, todayStr]);
   const todaySubmittedCount = todayLogs.length;
   const todayPendingCount = Math.max(0, totalFacultyCount - todaySubmittedCount);
+  const todaySyncedCount = todayLogs.filter((l) => l.sheetsSynced).length;
   const approvedCount = todayLogs.filter((l) => l.hodStatus === 'Approved').length;
   const reviewCount = todayLogs.filter((l) => l.hodStatus !== 'Approved').length;
 
@@ -313,14 +318,27 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={onPrintDailySummary}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs cursor-pointer transition-all active:scale-95"
-            title="Download Daily HoD Sign-Off Sheet (PDF/Print)"
-          >
-            <Printer className="w-3.5 h-3.5" />
-            <span>Daily Sign-Off PDF</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsGrandReportModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white shadow-xs cursor-pointer transition-all active:scale-95"
+              title="View official Grand Daily Activity Report layout matching departmental image"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Grand Daily Report</span>
+              <span className="sm:hidden">Grand Report</span>
+            </button>
+
+            <button
+              onClick={onPrintDailySummary}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs cursor-pointer transition-all active:scale-95"
+              title="Download Daily HoD Sign-Off Sheet (PDF/Print)"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>Daily Sign-Off PDF</span>
+            </button>
+          </div>
         </div>
 
         {/* 3 Summary Bento Cards */}
@@ -336,10 +354,10 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
 
           <div className="bg-slate-800/60 rounded-xl p-2.5 border border-slate-700/60 text-center">
             <span className="text-[10px] uppercase font-semibold tracking-wider text-slate-400 block">
-              Approved
+              Direct Sheets Synced
             </span>
             <div className="text-lg font-extrabold text-blue-400 mt-0.5">
-              {approvedCount}
+              {todaySyncedCount}
             </div>
           </div>
 
@@ -381,7 +399,7 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
             {onOpenGoogleSheetsSettings && (
               <button
                 type="button"
@@ -395,12 +413,27 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
 
             <button
               type="button"
-              onClick={() => exportLogsToExcelCsv(filteredLogs)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors cursor-pointer"
-              title="Download filtered activity register as CSV file compatible with Excel"
+              onClick={() => setIsGrandReportModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition-colors cursor-pointer"
+              title="Preview Grand Daily Activity Report in official college format"
             >
-              <FileDown className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Export Excel (.csv)</span>
+              <FileSpreadsheet className="w-3.5 h-3.5 text-blue-600" />
+              <span>Preview Grand Report</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                exportMultiTabGrandExcel(filteredLogs, {
+                  targetDate: selectedDate,
+                  filename: `Matrusri_IT_Dept_Faculty_Activity_Report_${selectedDate}.xlsx`,
+                })
+              }
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-600 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
+              title="Download official multi-tab Excel Workbook (.xlsx) with Grand Tab + separate teacher tabs"
+            >
+              <FileDown className="w-3.5 h-3.5 text-emerald-200" />
+              <span>Export Grand Excel (.xlsx)</span>
             </button>
           </div>
         </div>
@@ -552,17 +585,24 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
 
                   {/* Status chip & toggle arrow */}
                   <div className="flex items-center gap-2 shrink-0 pt-0.5">
-                    <span
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                        isApproved
-                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                          : isNeedsClarification
-                          ? 'bg-rose-50 text-rose-800 border-rose-300'
-                          : 'bg-amber-50 text-amber-800 border-amber-300'
-                      }`}
-                    >
-                      {log.hodStatus || 'Under Review'}
-                    </span>
+                    {log.sheetsSynced ? (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-800 border-emerald-300 inline-flex items-center gap-1">
+                        <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                        <span>Direct Sheet Synced</span>
+                      </span>
+                    ) : (
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                          isApproved
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                            : isNeedsClarification
+                            ? 'bg-rose-50 text-rose-800 border-rose-300'
+                            : 'bg-amber-50 text-amber-800 border-amber-300'
+                        }`}
+                      >
+                        {log.hodStatus || 'Submitted'}
+                      </span>
+                    )}
 
                     <button
                       type="button"
@@ -649,7 +689,7 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
                       />
 
                       <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <button
                             onClick={() => onPrintLog(log)}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 cursor-pointer shadow-2xs"
@@ -658,15 +698,22 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
                             <span>Print Individual Sheet</span>
                           </button>
 
-                          {onSyncLogToSheets && (
-                            <button
-                              onClick={() => onSyncLogToSheets(log)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 cursor-pointer"
-                              title="Send this log to Google Sheets"
-                            >
-                              <CloudUpload className="w-3.5 h-3.5 text-emerald-600" />
-                              <span>Push to Sheets</span>
-                            </button>
+                          {log.sheetsSynced ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200">
+                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Direct Synced to Sheets</span>
+                            </span>
+                          ) : (
+                            onSyncLogToSheets && (
+                              <button
+                                onClick={() => onSyncLogToSheets(log)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-300 cursor-pointer"
+                                title="Re-sync this log to Google Sheets"
+                              >
+                                <CloudUpload className="w-3.5 h-3.5 text-blue-600" />
+                                <span>Re-sync to Sheets</span>
+                              </button>
+                            )
                           )}
                         </div>
 
@@ -681,10 +728,10 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
 
                           <button
                             onClick={() => handleQuickApprove(log)}
-                            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow-2xs cursor-pointer active:scale-95"
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 shadow-2xs cursor-pointer active:scale-95"
                           >
                             <Check className="w-3.5 h-3.5 stroke-[3]" />
-                            <span>Approve Log</span>
+                            <span>{isApproved ? 'Reviewed' : 'Acknowledge Log'}</span>
                           </button>
                         </div>
                       </div>
@@ -696,6 +743,14 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
           })
         )}
       </div>
+
+      {/* Grand Daily Activity Report Preview Modal */}
+      <GrandReportPreviewModal
+        isOpen={isGrandReportModalOpen}
+        onClose={() => setIsGrandReportModalOpen(false)}
+        logs={logs}
+        initialDate={selectedDate}
+      />
     </div>
   );
 };

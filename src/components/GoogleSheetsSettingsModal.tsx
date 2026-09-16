@@ -32,8 +32,11 @@ import {
   createNewActivitySpreadsheet,
   submitLogToGoogleSheets,
   testAppsScriptEndpoint,
+  ensureFacultyTabExists,
+  initializeAllFacultyTabsInSheet,
 } from '../utils/googleSheets';
 import { syncFacultyLogsDirectToGoogleSheet } from '../utils/googleSheetsApi';
+import { FACULTY_DIRECTORY } from '../timetableData';
 import {
   googleSignIn,
   initAuth,
@@ -42,11 +45,13 @@ import {
 } from '../utils/firebaseAuth';
 import { User } from 'firebase/auth';
 import { ActivityLog } from '../types';
+import { saveDepartmentSettings } from '../utils/firestoreService';
 
 interface GoogleSheetsSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   logs?: ActivityLog[];
+  currentFacultyName?: string;
   onConfigChanged?: () => void;
 }
 
@@ -54,6 +59,7 @@ export const GoogleSheetsSettingsModal: React.FC<GoogleSheetsSettingsModalProps>
   isOpen,
   onClose,
   logs = [],
+  currentFacultyName = '',
   onConfigChanged,
 }) => {
   const [activeTab, setActiveTab] = useState<'direct' | 'script' | 'plainSheetInfo'>('direct');
@@ -69,6 +75,8 @@ export const GoogleSheetsSettingsModal: React.FC<GoogleSheetsSettingsModalProps>
   const [currentSpreadsheetTitle, setCurrentSpreadsheetTitle] = useState('');
   const [isVerifyingSheet, setIsVerifyingSheet] = useState(false);
   const [isCreatingSheet, setIsCreatingSheet] = useState(false);
+  const [isEnsuringTab, setIsEnsuringTab] = useState(false);
+  const [isInitializingAllTabs, setIsInitializingAllTabs] = useState(false);
 
   // Test & Feedback
   const [isTestingWrite, setIsTestingWrite] = useState(false);
@@ -209,9 +217,14 @@ export const GoogleSheetsSettingsModal: React.FC<GoogleSheetsSettingsModalProps>
       setCurrentSpreadsheetId(meta.spreadsheetId);
       setCurrentSpreadsheetTitle(meta.title);
 
+      await saveDepartmentSettings({
+        spreadsheetId: meta.spreadsheetId,
+        spreadsheetTitle: meta.title,
+      }, currentUser?.email || 'Admin');
+
       setStatusFeedback({
         type: 'success',
-        message: `Connected to "${meta.title}" (${meta.sheets.length} tab(s) found)!`,
+        message: `Connected to "${meta.title}" (${meta.sheets.length} tab(s) found)! All department members can now sync to this sheet.`,
         link: meta.spreadsheetUrl,
       });
 
@@ -248,9 +261,14 @@ export const GoogleSheetsSettingsModal: React.FC<GoogleSheetsSettingsModalProps>
       setCurrentSpreadsheetTitle(newSheet.title);
       setSpreadsheetInput(newSheet.spreadsheetUrl);
 
+      await saveDepartmentSettings({
+        spreadsheetId: newSheet.spreadsheetId,
+        spreadsheetTitle: newSheet.title,
+      }, currentUser?.email || 'Admin');
+
       setStatusFeedback({
         type: 'success',
-        message: `Created new Google Sheet "${newSheet.title}" in your Google Drive!`,
+        message: `Created new Google Sheet "${newSheet.title}" in your Google Drive! Department sync configured.`,
         link: newSheet.spreadsheetUrl,
       });
 
@@ -289,7 +307,7 @@ export const GoogleSheetsSettingsModal: React.FC<GoogleSheetsSettingsModalProps>
     setStatusFeedback(null);
 
     try {
-      const testFaculty = currentUser?.displayName || 'Test Faculty';
+      const testFaculty = currentFacultyName?.trim() || currentUser?.displayName || 'Test Faculty';
       const todayStr = new Date().toISOString().split('T')[0];
 
       const testPayload = {
@@ -327,14 +345,103 @@ export const GoogleSheetsSettingsModal: React.FC<GoogleSheetsSettingsModalProps>
     }
   };
 
+  // Explicitly check/create tab for the currently selected faculty member
+  const handleEnsureCurrentFacultyTab = async () => {
+    const token = currentAccessToken || (await getAccessToken());
+    if (!token) {
+      setStatusFeedback({
+        type: 'error',
+        message: 'Please sign in with Google in Step 1 to create or verify faculty tabs.',
+      });
+      return;
+    }
+
+    if (!currentSpreadsheetId) {
+      setStatusFeedback({
+        type: 'error',
+        message: 'Please connect your Google Sheet in Step 2 first.',
+      });
+      return;
+    }
+
+    const facultyToEnsure = currentFacultyName?.trim() || currentUser?.displayName || 'Faculty Member';
+    setIsEnsuringTab(true);
+    setStatusFeedback(null);
+
+    try {
+      const res = await ensureFacultyTabExists(token, currentSpreadsheetId, facultyToEnsure);
+      setStatusFeedback({
+        type: 'success',
+        message: res.created
+          ? `Created new tab "${res.tabName}" with table headers in your Google Sheet!`
+          : `Tab "${res.tabName}" already exists and verified in your Google Sheet!`,
+        link: res.tabUrl,
+      });
+      if (onConfigChanged) onConfigChanged();
+    } catch (err: unknown) {
+      const errText = err instanceof Error ? err.message : String(err);
+      setStatusFeedback({
+        type: 'error',
+        message: `Failed to create/verify tab: ${errText}`,
+      });
+    } finally {
+      setIsEnsuringTab(false);
+    }
+  };
+
+  // Initialize tabs for all 15 department faculty members in one click
+  const handleInitializeAllFacultyTabs = async () => {
+    const token = currentAccessToken || (await getAccessToken());
+    if (!token) {
+      setStatusFeedback({
+        type: 'error',
+        message: 'Please sign in with Google in Step 1 to initialize faculty tabs.',
+      });
+      return;
+    }
+
+    if (!currentSpreadsheetId) {
+      setStatusFeedback({
+        type: 'error',
+        message: 'Please connect your Google Sheet in Step 2 first.',
+      });
+      return;
+    }
+
+    setIsInitializingAllTabs(true);
+    setStatusFeedback(null);
+
+    try {
+      const facultyList = FACULTY_DIRECTORY.map((f) => f.name);
+      const res = await initializeAllFacultyTabsInSheet(token, currentSpreadsheetId, facultyList);
+      setStatusFeedback({
+        type: 'success',
+        message: `All faculty tabs verified! (${res.createdTabs.length} newly created, ${res.existingTabs.length} already existed).`,
+        link: res.spreadsheetUrl,
+      });
+      if (onConfigChanged) onConfigChanged();
+    } catch (err: unknown) {
+      const errText = err instanceof Error ? err.message : String(err);
+      setStatusFeedback({
+        type: 'error',
+        message: `Failed to initialize all tabs: ${errText}`,
+      });
+    } finally {
+      setIsInitializingAllTabs(false);
+    }
+  };
+
   // Apps Script Web App save
-  const handleSaveAppsScriptUrl = () => {
+  const handleSaveAppsScriptUrl = async () => {
     const trimmed = appsScriptUrlInput.trim();
     setStoredSheetsUrl(trimmed);
+    await saveDepartmentSettings({
+      sheetsWebAppUrl: trimmed,
+    }, currentUser?.email || 'Admin');
     setStatusFeedback({
       type: 'success',
       message: trimmed
-        ? 'Apps Script Web App URL saved!'
+        ? 'Apps Script Web App URL saved and shared across all department devices!'
         : 'Apps Script Web App URL cleared.',
     });
     if (onConfigChanged) onConfigChanged();
@@ -682,34 +789,94 @@ export const GoogleSheetsSettingsModal: React.FC<GoogleSheetsSettingsModalProps>
                   </div>
                 </div>
 
-                {/* Connected Sheet Preview Card */}
+                {/* Connected Sheet Preview & Faculty Tabs Management */}
                 {currentSpreadsheetId && (
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2.5 flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-2 text-slate-800 truncate">
-                      <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
-                      <div className="truncate">
-                        <span className="font-bold text-slate-900 block truncate">
-                          {currentSpreadsheetTitle || 'Connected Google Sheet'}
-                        </span>
-                        <span className="text-[10px] text-slate-500 font-mono">
-                          ID: {currentSpreadsheetId.substring(0, 16)}...
-                        </span>
+                  <div className="space-y-2 pt-1">
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2 text-slate-800 truncate">
+                        <FileSpreadsheet className="w-5 h-5 text-emerald-600 shrink-0" />
+                        <div className="truncate">
+                          <span className="font-bold text-slate-900 block truncate">
+                            {currentSpreadsheetTitle || 'Connected Google Sheet'}
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-mono">
+                            ID: {currentSpreadsheetId}
+                          </span>
+                        </div>
                       </div>
+
+                      <a
+                        href={`https://docs.google.com/spreadsheets/d/${currentSpreadsheetId}/edit`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg font-bold text-[11px] transition-colors inline-flex items-center gap-1 shrink-0 shadow-2xs"
+                      >
+                        <span>Open Sheet</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
                     </div>
 
-                    <button
-                      type="button"
-                      disabled={isTestingWrite}
-                      onClick={handleSendTestWrite}
-                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-md font-bold text-[11px] transition-colors cursor-pointer shrink-0 inline-flex items-center gap-1.5"
-                    >
-                      {isTestingWrite ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        <Send className="w-3 h-3" />
-                      )}
-                      <span>Send Test Row</span>
-                    </button>
+                    {/* Faculty Tab Verification & Auto-Creation Action Card */}
+                    <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-2.5 shadow-2xs">
+                      <div className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-1.5 font-bold text-slate-900">
+                          <Layers className="w-4 h-4 text-blue-600" />
+                          <span>Faculty Sheet Tabs</span>
+                        </div>
+                        <span className="text-[11px] text-slate-600 font-medium">
+                          Active Faculty: <strong className="text-slate-900">{currentFacultyName || 'Staff Member'}</strong>
+                        </span>
+                      </div>
+
+                      <p className="text-[11px] text-slate-600 leading-relaxed">
+                        Data is registered into each faculty member&apos;s tab at the bottom of your Google Sheet. If a tab does not exist yet, you can create it right now:
+                      </p>
+
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          disabled={isEnsuringTab}
+                          onClick={handleEnsureCurrentFacultyTab}
+                          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold text-[11px] transition-colors cursor-pointer shrink-0 inline-flex items-center gap-1.5 disabled:opacity-50 shadow-2xs"
+                        >
+                          {isEnsuringTab ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <PlusCircle className="w-3.5 h-3.5" />
+                          )}
+                          <span>Create / Verify Tab for &ldquo;{currentFacultyName || 'Faculty'}&rdquo;</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={isInitializingAllTabs}
+                          onClick={handleInitializeAllFacultyTabs}
+                          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg font-semibold text-[11px] transition-colors cursor-pointer shrink-0 inline-flex items-center gap-1.5 disabled:opacity-50 shadow-2xs"
+                          title="Verify and create tabs for all 15 department faculty members"
+                        >
+                          {isInitializingAllTabs ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                          )}
+                          <span>Create All 15 Faculty Tabs</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={isTestingWrite}
+                          onClick={handleSendTestWrite}
+                          className="px-3 py-1.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border border-emerald-300 rounded-lg font-bold text-[11px] transition-colors cursor-pointer shrink-0 inline-flex items-center gap-1.5 disabled:opacity-50 ml-auto shadow-2xs"
+                        >
+                          {isTestingWrite ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Send className="w-3.5 h-3.5 text-emerald-700" />
+                          )}
+                          <span>Send Test Row</span>
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

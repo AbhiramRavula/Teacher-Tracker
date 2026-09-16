@@ -39,6 +39,9 @@ export interface ActivityLog {
   hodStatus?: 'Submitted' | 'Logged' | 'Approved' | 'Under Review' | 'Needs Clarification';
   sheetsSynced?: boolean;
   sheetsSyncedAt?: string;
+  sheetsSyncedMethod?: 'direct_api' | 'apps_script' | 'none';
+  sheetsTargetTab?: string;
+  sheetsSpreadsheetUrl?: string;
 }
 
 export interface GoogleSheetsLogItem {

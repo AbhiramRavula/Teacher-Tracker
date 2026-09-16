@@ -17,6 +17,14 @@ import { HodReportDocument } from './components/HodReportDocument';
 import { TimetableModal } from './components/TimetableModal';
 import { GoogleSheetsSettingsModal } from './components/GoogleSheetsSettingsModal';
 import { HodAuthModal } from './components/HodAuthModal';
+import { TimetableTabContent } from './components/TimetableTabContent';
+import { SubmissionsHistoryTabContent } from './components/SubmissionsHistoryTabContent';
+import { exportMultiTabGrandExcel } from './utils/excelExport';
+import {
+  fetchDepartmentSettings,
+  saveActivityLogToFirestore,
+  fetchActivityLogsFromFirestore,
+} from './utils/firestoreService';
 import {
   saveSlotDraft,
   loadDraftsForEmployeeAndDate,
@@ -53,6 +61,7 @@ import {
   AlertCircle,
   FileCheck2,
   ChevronRight,
+  ChevronLeft,
   Sparkles,
   BookOpen,
   Briefcase,
@@ -67,13 +76,16 @@ import {
   CloudUpload,
   ExternalLink,
   ShieldCheck,
+  Lock,
+  Download,
+  X,
 } from 'lucide-react';
 
 export default function App() {
   const todayStr = new Date().toISOString().split('T')[0];
 
-  // Active top view tab: 'tracker' (Faculty / Staff Tracker) vs 'hod' (HoD Dashboard)
-  const [activeTab, setActiveTab] = useState<'tracker' | 'hod'>('tracker');
+  // Active top view tab: 'tracker' (Daily Tracker) | 'schedule' (Master Timetable) | 'history' (Submissions Archive) | 'hod' (HoD Dashboard)
+  const [activeTab, setActiveTab] = useState<'tracker' | 'schedule' | 'history' | 'hod'>('tracker');
 
   // Determine current day of week (1=Mon ... 6=Sat, 0=Sun maps to MON)
   const initialDayOfWeek: DayOfWeek = useMemo(() => {
@@ -152,7 +164,7 @@ export default function App() {
     linkText?: string;
   } | null>(null);
 
-  // Persist logs
+  // Persist logs to localStorage
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(logs));
@@ -160,6 +172,37 @@ export default function App() {
       console.error('Failed to save logs to localStorage', e);
     }
   }, [logs]);
+
+  // Load remote department settings from Firestore on mount
+  useEffect(() => {
+    fetchDepartmentSettings()
+      .then((settings) => {
+        if (settings) {
+          if (settings.spreadsheetId) setSpreadsheetId(settings.spreadsheetId);
+          if (settings.spreadsheetTitle) setSpreadsheetTitle(settings.spreadsheetTitle);
+          if (settings.sheetsWebAppUrl) setGoogleSheetsUrl(settings.sheetsWebAppUrl);
+        }
+      })
+      .catch((err) => console.warn('Could not load remote department settings:', err));
+  }, []);
+
+  // Fetch submitted logs from Firestore on mount to sync across all department staff
+  useEffect(() => {
+    fetchActivityLogsFromFirestore()
+      .then((remoteLogs) => {
+        if (remoteLogs && remoteLogs.length > 0) {
+          setLogs((prev) => {
+            const map = new Map<string, ActivityLog>();
+            prev.forEach((l) => map.set(l.id, l));
+            remoteLogs.forEach((l) => map.set(l.id, l));
+            return Array.from(map.values()).sort(
+              (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+            );
+          });
+        }
+      })
+      .catch((err) => console.warn('Could not load Firestore logs:', err));
+  }, []);
 
   // Listen to Firebase Auth state for HoD / Admin verification
   useEffect(() => {
@@ -169,20 +212,22 @@ export default function App() {
           setStoredHodAuthEmail(user.email);
           setHodAdminEmail(user.email);
         } else {
-          // Immediately sign out unauthorized account
-          signOutCurrentUser().catch(() => {});
+          // Keep user signed in for Google Sheets live sync, but don't grant HoD role
           setStoredHodAuthEmail(null);
           setHodAdminEmail(null);
         }
+      } else {
+        setStoredHodAuthEmail(null);
+        setHodAdminEmail(null);
       }
     });
     return () => unsubAuth();
   }, []);
 
-  // Toast timeout
+  // Toast timeout (5 seconds for comfortable reading)
   useEffect(() => {
     if (toastMessage) {
-      const timer = setTimeout(() => setToastMessage(null), 3500);
+      const timer = setTimeout(() => setToastMessage(null), 5000);
       return () => clearTimeout(timer);
     }
   }, [toastMessage]);
@@ -300,6 +345,21 @@ export default function App() {
         type: 'info',
       });
     }
+  };
+
+  // Quick 1-click previous / next day navigation
+  const handlePrevDate = () => {
+    const d = new Date(date + 'T00:00:00');
+    d.setDate(d.getDate() - 1);
+    const newDateStr = d.toISOString().split('T')[0];
+    handleDateChange(newDateStr);
+  };
+
+  const handleNextDate = () => {
+    const d = new Date(date + 'T00:00:00');
+    d.setDate(d.getDate() + 1);
+    const newDateStr = d.toISOString().split('T')[0];
+    handleDateChange(newDateStr);
   };
 
   // Detailed timetable slot mappings for currently selected faculty and day
@@ -422,6 +482,10 @@ export default function App() {
     } else {
       setPendingAdminAction('sheets_config');
       setIsHodAuthModalOpen(true);
+      setToastMessage({
+        text: 'Administrator access required to configure Google Sheets integration.',
+        type: 'info',
+      });
     }
   };
 
@@ -481,37 +545,18 @@ export default function App() {
     };
   };
 
-  // Save current log locally
-  const handleSaveLog = () => {
+  // Save current log (directly updates in Google Sheets without requiring HoD approval)
+  const handleSaveLog = async () => {
     if (!employeeName.trim()) {
       setFormError('Please select or enter the staff member name.');
       setIsFacultySelectorOpen(true);
       return;
     }
     setFormError('');
-
-    const newLog: ActivityLog = {
-      id: 'log_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
-      employeeName: employeeName.trim(),
-      role,
-      date,
-      department: department.trim() || 'Department of Information Technology',
-      activities: { ...activities },
-      periodData: { ...periodData },
-      savedAt: new Date().toISOString(),
-      totalFilledSlots: filledSlotsCount,
-      hodStatus: 'Submitted',
-      sheetsSynced: false,
-    };
-
-    setLogs((prev) => [newLog, ...prev]);
-    setToastMessage({
-      text: `Daily activity log for ${employeeName.trim()} on ${date} saved locally!`,
-      type: 'success',
-    });
+    await handleSubmitTodaysLog();
   };
 
-  // Submit Today's Log directly to Google Sheets via Apps Script Web App URL and save locally
+  // Submit Today's Log directly to Google Sheets and save locally
   const handleSubmitTodaysLog = async () => {
     if (!employeeName.trim()) {
       setFormError('Please select or enter the staff member name.');
@@ -547,23 +592,56 @@ export default function App() {
       sheetsSynced: false,
     };
 
-    const isConfigured = Boolean(getStoredSpreadsheetId() || googleSheetsUrl.trim());
+    const isAdmin = Boolean(hodAdminEmail && isEmailAuthorized(hodAdminEmail));
+
+    // Immediately persist locally and to Firestore to guarantee zero data loss
+    setLogs((prev) => [newLog, ...prev]);
+    saveActivityLogToFirestore(newLog).catch((err) => console.warn('Firestore log persist note:', err));
+
+    // Check if Sheets sync is configured; if missing locally, refresh from Firestore settings
+    let currentSheetsUrl = googleSheetsUrl.trim();
+    let currentSheetId = getStoredSpreadsheetId();
+
+    if (!currentSheetsUrl && !currentSheetId) {
+      try {
+        const remoteSettings = await fetchDepartmentSettings();
+        if (remoteSettings) {
+          if (remoteSettings.sheetsWebAppUrl) {
+            currentSheetsUrl = remoteSettings.sheetsWebAppUrl.trim();
+            setGoogleSheetsUrl(currentSheetsUrl);
+          }
+          if (remoteSettings.spreadsheetId) {
+            currentSheetId = remoteSettings.spreadsheetId.trim();
+            setSpreadsheetId(currentSheetId);
+          }
+          if (remoteSettings.spreadsheetTitle) {
+            setSpreadsheetTitle(remoteSettings.spreadsheetTitle);
+          }
+        }
+      } catch (err) {
+        console.warn('Could not refresh remote department settings before submit:', err);
+      }
+    }
+
+    const isConfigured = Boolean(currentSheetId || currentSheetsUrl);
 
     // If neither Direct Google Sheet nor Google Apps Script Web App URL is configured
     if (!isConfigured) {
-      setLogs((prev) => [newLog, ...prev]);
       setToastMessage({
-        text: `Log saved locally with status "Submitted"! Connect your Google Sheet to sync faculty tabs directly.`,
-        type: 'info',
+        text: `Activity log recorded! ${filledSlotsCount} duties for ${employeeName.trim()} safely saved to department records. (Google Sheets sync pending HoD setup).`,
+        type: 'success',
       });
-      setIsSheetsModalOpen(true);
+      // Only prompt the sheets modal if user is an authorized Admin
+      if (isAdmin) {
+        setIsSheetsModalOpen(true);
+      }
       return;
     }
 
-    // Dispatches log via Direct Google Sheets API v4 or Apps Script Web App directly without approval gate
+    // Dispatches log via Public Google Apps Script Web App (zero auth) or Direct API
     setIsSubmittingToSheets(true);
     setToastMessage({
-      text: `Syncing activity log to Google Sheet for ${employeeName.trim()}...`,
+      text: `Syncing ${filledSlotsCount} hourly activities to Google Sheet tab "${employeeName.trim()}"...`,
       type: 'info',
     });
 
@@ -573,31 +651,35 @@ export default function App() {
         ...newLog,
         sheetsSynced: result.success,
         sheetsSyncedAt: result.success ? new Date().toISOString() : undefined,
+        sheetsSyncedMethod: result.method,
+        sheetsTargetTab: result.tabName,
+        sheetsSpreadsheetUrl: result.spreadsheetUrl,
       };
 
-      setLogs((prev) => [updatedLog, ...prev]);
+      setLogs((prev) => prev.map((l) => (l.id === newLogId ? updatedLog : l)));
+      saveActivityLogToFirestore(updatedLog).catch((err) => console.warn('Firestore log persist note:', err));
 
       if (result.success) {
         setToastMessage({
-          text: result.message || `Submitted directly to Google Sheet tab "${employeeName.trim()}"!`,
+          text: `Activity log submitted! Successfully logged ${filledSlotsCount} activities for ${employeeName.trim()} to sheet tab "${result.tabName || employeeName.trim()}" & Master Daily Report!`,
           type: 'success',
           link: result.spreadsheetUrl,
           linkText: 'Open in Sheets',
         });
       } else {
         setToastMessage({
-          text: `Saved locally as Submitted. Google Sheets: ${result.message}`,
+          text: `Log safely recorded in department records! Note: ${result.message}`,
           type: 'info',
         });
-        if (result.method === 'none') {
+        // Only open the configuration modal if the user is an Admin
+        if (isAdmin && (result.method === 'none' || result.message.includes('authorization is required') || result.message.includes('not connected') || result.message.includes('permission'))) {
           setIsSheetsModalOpen(true);
         }
       }
     } catch (err: unknown) {
-      setLogs((prev) => [newLog, ...prev]);
       const errorMsg = err instanceof Error ? err.message : String(err);
       setToastMessage({
-        text: `Saved locally as Submitted. Note: ${errorMsg}`,
+        text: `Log safely recorded in department records. Note: ${errorMsg}`,
         type: 'info',
       });
     } finally {
@@ -605,7 +687,7 @@ export default function App() {
     }
   };
 
-  // Sync an existing log from HoD dashboard to Google Sheets
+  // Sync an existing log from HoD dashboard or History to Google Sheets
   const handleSyncLogToSheets = async (log: ActivityLog) => {
     const isConfigured = Boolean(getStoredSpreadsheetId() || googleSheetsUrl.trim());
     if (!isConfigured) {
@@ -617,7 +699,7 @@ export default function App() {
       return;
     }
 
-    const payload = buildSheetsPayload(log.employeeName, log.date, log.activities, log.role);
+    const payload = buildSheetsPayload(log.employeeName, log.date, log.activities, log.role, log.periodData);
     setToastMessage({
       text: `Sending ${log.employeeName}'s log to Google Sheets...`,
       type: 'info',
@@ -625,13 +707,16 @@ export default function App() {
 
     const result = await dispatchLogToGoogleSheets(payload);
     if (result.success) {
-      setLogs((prev) =>
-        prev.map((l) =>
-          l.id === log.id
-            ? { ...l, sheetsSynced: true, sheetsSyncedAt: new Date().toISOString() }
-            : l
-        )
-      );
+      const updatedLog: ActivityLog = {
+        ...log,
+        sheetsSynced: true,
+        sheetsSyncedAt: new Date().toISOString(),
+        sheetsSyncedMethod: result.method,
+        sheetsTargetTab: result.tabName,
+        sheetsSpreadsheetUrl: result.spreadsheetUrl,
+      };
+      setLogs((prev) => prev.map((l) => (l.id === log.id ? updatedLog : l)));
+      saveActivityLogToFirestore(updatedLog).catch((err) => console.warn('Firestore log persist note:', err));
       setToastMessage({
         text: result.message || `Synced ${log.employeeName}'s log to sheet tab!`,
         type: 'success',
@@ -714,101 +799,167 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex justify-center selection:bg-blue-600 selection:text-white antialiased">
-      {/* Mobile-First Container (max-w-md centered on desktop, 100% width on smartphone) */}
-      <div className="w-full max-w-md min-h-screen bg-slate-50 flex flex-col shadow-2xl border-x border-slate-200/80">
+      {/* Responsive Container: comfortable max-w-5xl on desktop/tablets, 100% on smartphone */}
+      <div className="w-full max-w-5xl mx-auto min-h-screen bg-slate-50 flex flex-col shadow-xl border-x border-slate-200/80">
         
         {/* Sticky App Header */}
         <header className="sticky top-0 z-40 bg-slate-900 text-white shadow-md">
           {/* Top Brand Bar */}
-          <div className="px-4 py-3 flex items-center justify-between border-b border-slate-800">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center text-white font-bold shadow-xs">
+          <div className="px-3.5 sm:px-5 py-3 flex items-center justify-between border-b border-slate-800 gap-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center text-white font-bold shadow-xs shrink-0">
                 IT
               </div>
-              <div>
-                <h1 className="text-sm font-bold tracking-tight text-white leading-tight">
+              <div className="min-w-0">
+                <h1 className="text-sm sm:text-base font-bold tracking-tight text-white leading-tight truncate">
                   Matrusri Engineering College
                 </h1>
-                <p className="text-[11px] text-slate-300">
-                  Dept of Information Technology • Activity Tracker
+                <p className="text-[11px] text-slate-300 truncate">
+                  Dept of Information Technology • Daily Activity Tracker
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-1.5">
-              <div
-                className="hidden xs:inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-sky-300 bg-slate-800/90 border border-sky-500/40 rounded-lg"
-                title="Firebase Authentication Active for Admin Access Verification"
-              >
-                <ShieldCheck className="w-3 h-3 text-sky-400" />
-                <span>Firebase Auth</span>
-              </div>
-
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+              {/* Quick Excel (.xlsx) Download */}
               <button
+                type="button"
+                onClick={() => {
+                  exportMultiTabGrandExcel(logs);
+                  setToastMessage({
+                    text: 'Generated departmental multi-tab Excel workbook (.xlsx)!',
+                    type: 'success',
+                  });
+                }}
+                className="px-2.5 py-1 text-[11px] font-semibold text-emerald-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-emerald-500/40 rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1 shadow-2xs"
+                title="Download complete multi-tab departmental Excel (.xlsx)"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="hidden sm:inline">Excel (.xlsx)</span>
+              </button>
+
+              {/* Google Sheets Sync status & configuration trigger */}
+              <button
+                type="button"
                 onClick={handleOpenSheetsConfig}
-                className={`px-2.5 py-1 text-[11px] font-semibold border rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1 ${
+                className={`px-2.5 py-1 text-[11px] font-semibold border rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1.5 ${
                   isGoogleSheetsConfigured
                     ? 'text-emerald-300 hover:text-white bg-slate-800 hover:bg-slate-700 border-emerald-500/40'
                     : 'text-amber-300 hover:text-white bg-slate-800 hover:bg-slate-700 border-amber-500/40'
                 }`}
-                title="Configure Google Sheets Live Sync (Authorized Admin Only)"
+                title={
+                  isGoogleSheetsConfigured
+                    ? `Google Sheets Live Sync Connected: ${spreadsheetTitle || 'Active'}`
+                    : 'Connect Google Sheet to enable automatic faculty tab registration'
+                }
               >
-                <FileSpreadsheet className="w-3 h-3 text-emerald-400" />
-                <span>Sheets</span>
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span className="hidden sm:inline">Sheets Sync</span>
+                <span className="sm:hidden">Sheets</span>
                 {isGoogleSheetsConfigured ? (
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
                 ) : (
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                  <span className="w-2 h-2 rounded-full bg-amber-400"></span>
                 )}
               </button>
 
-              <button
-                onClick={() => setIsTimetableModalOpen(true)}
-                className="px-2.5 py-1 text-[11px] font-semibold text-blue-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1"
-                title="View Master Timetable Document"
-              >
-                <BookOpen className="w-3 h-3" />
-                <span>Timetable</span>
-              </button>
+              {/* Admin status / Login badge */}
+              {hodAdminEmail ? (
+                <button
+                  type="button"
+                  onClick={handleHodLogout}
+                  className="px-2 py-1 text-[11px] font-medium text-slate-300 hover:text-rose-300 bg-slate-800/90 border border-slate-700 rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1"
+                  title={`Signed in as Admin (${hodAdminEmail}). Click to sign out.`}
+                >
+                  <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                  <span className="hidden md:inline">Admin</span>
+                  <span className="text-[10px] text-slate-400 hover:text-rose-300">Exit</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPendingAdminAction('hod_tab');
+                    setIsHodAuthModalOpen(true);
+                  }}
+                  className="px-2 py-1 text-[11px] font-medium text-slate-300 hover:text-white bg-slate-800/80 border border-slate-700 rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1"
+                  title="Sign in with authorized Google account for Admin / HoD access"
+                >
+                  <Lock className="w-3 h-3 text-amber-400" />
+                  <span className="hidden sm:inline">Admin Login</span>
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Role Switcher Tabs (Faculty Login vs HoD Dashboard) */}
-          <div className="grid grid-cols-2 p-1.5 bg-slate-950 text-xs font-semibold gap-1">
+          {/* Navigation Segmented Tabs (4 tabs for effortless navigation) */}
+          <div className="grid grid-cols-4 p-1.5 bg-slate-950 text-xs font-semibold gap-1">
             <button
-              id="tab-faculty-login"
+              id="tab-faculty-tracker"
               onClick={() => setActiveTab('tracker')}
-              className={`min-h-[44px] rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+              className={`min-h-[44px] rounded-xl flex items-center justify-center gap-1 sm:gap-1.5 transition-all cursor-pointer px-1 text-center ${
                 activeTab === 'tracker'
-                  ? 'bg-blue-600 text-white shadow-xs'
+                  ? 'bg-blue-600 text-white shadow-xs font-bold'
                   : 'text-slate-400 hover:text-white hover:bg-slate-900'
               }`}
+              title="Daily Activity Tracker"
             >
-              <User className="w-4 h-4" />
-              <span>Faculty / Staff Portal</span>
+              <Clock className="w-4 h-4 shrink-0" />
+              <span className="truncate">Tracker</span>
+            </button>
+
+            <button
+              id="tab-timetable-schedule"
+              onClick={() => setActiveTab('schedule')}
+              className={`min-h-[44px] rounded-xl flex items-center justify-center gap-1 sm:gap-1.5 transition-all cursor-pointer px-1 text-center ${
+                activeTab === 'schedule'
+                  ? 'bg-blue-600 text-white shadow-xs font-bold'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-900'
+              }`}
+              title="Master Department Timetable & Faculty Schedules"
+            >
+              <BookOpen className="w-4 h-4 shrink-0" />
+              <span className="truncate">Timetable</span>
+            </button>
+
+            <button
+              id="tab-submissions-history"
+              onClick={() => setActiveTab('history')}
+              className={`min-h-[44px] rounded-xl flex items-center justify-center gap-1 sm:gap-1.5 transition-all cursor-pointer px-1 text-center relative ${
+                activeTab === 'history'
+                  ? 'bg-blue-600 text-white shadow-xs font-bold'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-900'
+              }`}
+              title="View all submitted activity logs and synced reports"
+            >
+              <History className="w-4 h-4 shrink-0" />
+              <span className="truncate">Submissions</span>
+              {logs.length > 0 && (
+                <span className="w-4 h-4 rounded-full bg-slate-700 text-slate-200 text-[10px] font-bold flex items-center justify-center ml-0.5">
+                  {logs.length}
+                </span>
+              )}
             </button>
 
             <button
               id="tab-hod-dashboard"
               onClick={handleSwitchToHodTab}
-              className={`min-h-[44px] rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer relative ${
+              className={`min-h-[44px] rounded-xl flex items-center justify-center gap-1 sm:gap-1.5 transition-all cursor-pointer px-1 text-center relative ${
                 activeTab === 'hod'
-                  ? 'bg-blue-600 text-white shadow-xs'
+                  ? 'bg-blue-600 text-white shadow-xs font-bold'
                   : 'text-slate-400 hover:text-white hover:bg-slate-900'
               }`}
               title={hodAdminEmail ? `Authorized: ${hodAdminEmail}` : 'Restricted Admin Access'}
             >
-              <FileCheck2 className="w-4 h-4" />
-              <span>HoD Dashboard</span>
+              <FileCheck2 className="w-4 h-4 shrink-0" />
+              <span className="truncate">HoD Portal</span>
               {hodAdminEmail ? (
-                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>
               ) : (
-                <span className="text-[10px] px-1 py-0.2 bg-slate-800 text-amber-300 rounded border border-amber-400/30">
-                  Lock
-                </span>
+                <Lock className="w-3 h-3 text-amber-400/80 shrink-0" />
               )}
               {todaySubmittedCount > 0 && (
-                <span className="w-5 h-5 rounded-full bg-emerald-500 text-white text-[10px] font-bold flex items-center justify-center ml-0.5">
+                <span className="w-4 h-4 rounded-full bg-emerald-500 text-white text-[10px] font-bold flex items-center justify-center ml-0.5">
                   {todaySubmittedCount}
                 </span>
               )}
@@ -817,47 +968,75 @@ export default function App() {
         </header>
 
         {/* Main Body Content */}
-        <main className="flex-1 p-3.5 space-y-3.5 pb-28">
-          {activeTab === 'tracker' ? (
+        <main className="flex-1 p-3.5 sm:p-5 space-y-4 pb-28">
+          {activeTab === 'tracker' && (
             <>
               {/* Google Sheets Tab Link Info Banner */}
-              <div className="bg-emerald-50/80 border border-emerald-200/80 rounded-2xl p-3 flex items-center justify-between gap-2 text-xs">
-                <div className="flex items-center gap-2 text-slate-800 min-w-0">
-                  <div className="w-6 h-6 rounded-lg bg-emerald-600 flex items-center justify-center text-white shrink-0">
-                    <FileSpreadsheet className="w-3.5 h-3.5" />
+              {isGoogleSheetsConfigured ? (
+                <div className="bg-emerald-50/90 border border-emerald-200 rounded-2xl p-3 flex items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 text-slate-800 min-w-0">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-600 flex items-center justify-center text-white shrink-0 shadow-2xs">
+                      <FileSpreadsheet className="w-4 h-4" />
+                    </div>
+                    <div className="truncate min-w-0">
+                      <span className="text-[10px] text-emerald-700 font-semibold block leading-tight truncate">
+                        {spreadsheetTitle ? `Connected Sheet: ${spreadsheetTitle}` : 'Google Sheets Live Sync Active'}
+                      </span>
+                      <span className="font-bold text-slate-900 truncate font-mono text-[11px] block">
+                        Target Tab: &ldquo;{employeeName.trim() || 'Faculty Name'}&rdquo;
+                      </span>
+                    </div>
                   </div>
-                  <div className="truncate min-w-0">
-                    <span className="text-[10px] text-slate-500 block leading-tight truncate">
-                      {spreadsheetTitle ? `Target Sheet: ${spreadsheetTitle}` : 'Google Sheet Target Tab'}
-                    </span>
-                    <span className="font-bold text-slate-900 truncate font-mono text-[11px] block">
-                      Tab: {employeeName.trim() || 'Faculty Name'}
-                    </span>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {spreadsheetId && (
+                      <a
+                        href={`https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-xl font-bold text-[11px] transition-colors inline-flex items-center gap-1 shadow-2xs"
+                        title="Open Google Sheet in new tab"
+                      >
+                        <span>Open Sheet</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleOpenSheetsConfig}
+                      className="px-2.5 py-1.5 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl font-semibold text-[11px] transition-colors cursor-pointer shrink-0 shadow-2xs"
+                      title="Configure Google Sheets sync parameters (Requires Admin authentication)"
+                    >
+                      Tab &amp; Sync Settings
+                    </button>
                   </div>
                 </div>
+              ) : (
+                <div className="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-3 flex items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2.5 text-slate-800 min-w-0">
+                    <div className="w-8 h-8 rounded-xl bg-amber-500 flex items-center justify-center text-white shrink-0 shadow-2xs">
+                      <FileSpreadsheet className="w-4 h-4" />
+                    </div>
+                    <div className="truncate min-w-0">
+                      <span className="font-bold text-slate-900 text-xs block">
+                        Google Sheets Sync: Pending Admin Setup
+                      </span>
+                      <span className="text-[11px] text-slate-600 truncate block">
+                        All duty entries are securely saved to department cloud records. Admin can link live Google Sheet below.
+                      </span>
+                    </div>
+                  </div>
 
-                <div className="flex items-center gap-1.5 shrink-0">
-                  {spreadsheetId && (
-                    <a
-                      href={`https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-2 py-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 rounded-lg font-bold text-[11px] transition-colors inline-flex items-center gap-1"
-                      title="Open Google Sheet in new tab"
-                    >
-                      <span>Open</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  )}
                   <button
                     type="button"
-                    onClick={() => setIsSheetsModalOpen(true)}
-                    className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg font-semibold text-[11px] transition-colors cursor-pointer shrink-0"
+                    onClick={handleOpenSheetsConfig}
+                    className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-xl font-bold text-[11px] transition-colors cursor-pointer shrink-0 inline-flex items-center gap-1 shadow-2xs"
+                    title="Connect Google Sheet (Requires Admin authentication)"
                   >
-                    {isGoogleSheetsConfigured ? 'Sync Setup' : 'Connect Sheet'}
+                    <span>Connect Sheet</span>
                   </button>
                 </div>
-              </div>
+              )}
 
               {/* Staff Selector Card & Role Toggle */}
               <section className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-2xs space-y-3">
@@ -931,18 +1110,53 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Date Picker Input */}
-                <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100 text-xs">
-                  <div className="flex items-center gap-1.5 text-slate-600 font-semibold">
-                    <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Duty Date:</span>
+                {/* Date Picker Input with Prev / Next day quick navigation */}
+                <div className="pt-2 border-t border-slate-100 space-y-2">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <div className="flex items-center gap-1.5 text-slate-800 font-bold">
+                      <Calendar className="w-4 h-4 text-blue-600 shrink-0" />
+                      <span>Duty Date & Log Day:</span>
+                    </div>
+                    {date !== todayStr && (
+                      <button
+                        type="button"
+                        onClick={() => handleDateChange(todayStr)}
+                        className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-[11px] font-bold transition-colors cursor-pointer"
+                        title="Jump back to current date"
+                      >
+                        Jump to Today
+                      </button>
+                    )}
                   </div>
-                  <input
-                    type="date"
-                    value={date}
-                    onChange={(e) => handleDateChange(e.target.value)}
-                    className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-blue-100 focus:outline-none cursor-pointer"
-                  />
+
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handlePrevDate}
+                      className="min-h-[44px] px-3 bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-700 rounded-xl font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors shrink-0 shadow-2xs"
+                      title="Previous Day"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      <span className="hidden xs:inline">Prev</span>
+                    </button>
+
+                    <input
+                      type="date"
+                      value={date}
+                      onChange={(e) => handleDateChange(e.target.value)}
+                      className="flex-1 min-h-[44px] px-3 py-2 bg-slate-50 hover:bg-slate-100/80 focus:bg-white border border-slate-300 focus:border-blue-600 rounded-xl text-xs font-bold text-slate-900 focus:ring-2 focus:ring-blue-100 focus:outline-none cursor-pointer transition-all shadow-2xs text-center"
+                    />
+
+                    <button
+                      type="button"
+                      onClick={handleNextDate}
+                      className="min-h-[44px] px-3 bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-700 rounded-xl font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors shrink-0 shadow-2xs"
+                      title="Next Day"
+                    >
+                      <span className="hidden xs:inline">Next</span>
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               </section>
 
@@ -1057,136 +1271,177 @@ export default function App() {
                 </button>
               </section>
 
-              {/* Saved History for this Employee */}
-              <section className="mt-4 bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs space-y-3">
-                <div className="flex items-center justify-between text-xs font-bold text-slate-800">
-                  <span className="flex items-center gap-1.5 uppercase tracking-wide">
-                    <History className="w-3.5 h-3.5 text-blue-600" />
-                    Recent Submissions ({logs.length})
-                  </span>
+              {/* Quick Navigation Cards to Timetable & Submissions Archive */}
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('schedule')}
+                  className="p-3.5 bg-white hover:bg-slate-100 rounded-xl border border-slate-200 text-left transition-colors flex items-center justify-between cursor-pointer group shadow-2xs"
+                >
+                  <div>
+                    <span className="text-xs font-bold text-slate-800 block">Master Timetable</span>
+                    <span className="text-[11px] text-slate-500 block">View faculty schedule grid</span>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('history')}
+                  className="p-3.5 bg-white hover:bg-slate-100 rounded-xl border border-slate-200 text-left transition-colors flex items-center justify-between cursor-pointer group shadow-2xs"
+                >
+                  <div>
+                    <span className="text-xs font-bold text-slate-800 block">Submissions Log</span>
+                    <span className="text-[11px] text-slate-500 block">{logs.length} archived entries</span>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all" />
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* Tab 2: Master Timetable */}
+          {activeTab === 'schedule' && (
+            <TimetableTabContent
+              currentFacultyName={employeeName}
+              onSelectFaculty={(name) => handleSelectFaculty(name)}
+              onApplySlotToToday={(slotId, text) => {
+                handleApplyScheduleHint(slotId, text);
+                setActiveTab('tracker');
+              }}
+              onSwitchToTracker={() => setActiveTab('tracker')}
+            />
+          )}
+
+          {/* Tab 3: Submissions History & Reports */}
+          {activeTab === 'history' && (
+            <SubmissionsHistoryTabContent
+              logs={logs}
+              isAdmin={Boolean(hodAdminEmail && isEmailAuthorized(hodAdminEmail))}
+              onViewReport={(log) => handlePrintIndividualLog(log)}
+              onPrintLog={(log) => handlePrintIndividualLog(log)}
+              onSyncLog={(log) => handleSyncLogToSheets(log)}
+            />
+          )}
+
+          {/* Tab 4: HoD & Administrative Portal */}
+          {activeTab === 'hod' && (
+            !hodAdminEmail ? (
+              /* HoD Protected Access Gate */
+              <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-sm text-center space-y-4 my-6 max-w-md mx-auto">
+                <div className="w-14 h-14 mx-auto rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 shadow-xs">
+                  <FileCheck2 className="w-7 h-7" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">HoD & Administrative Access</h2>
+                  <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
+                    Access to departmental approvals, verification, and Google Sheets integration setup is restricted to verified administrators via Google Firebase.
+                  </p>
+                </div>
+
+                {/* Authorized Roles Notice (no emails displayed) */}
+                <div className="bg-slate-50 rounded-xl border border-slate-200 p-3 text-left space-y-1.5">
+                  <div className="text-[11px] font-bold text-slate-800 flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Authorized Roles Only</span>
+                  </div>
+                  <ul className="text-[11px] text-slate-600 list-disc list-inside space-y-0.5">
+                    <li>Head of Department (HoD)</li>
+                    <li>Systems & Software Developer (Dev)</li>
+                    <li>Assistant Head of Department (AHoD)</li>
+                  </ul>
+                </div>
+
+                <div className="pt-2 flex flex-col gap-2.5">
                   <button
-                    onClick={handleSwitchToHodTab}
-                    className="text-blue-600 hover:text-blue-700 text-xs font-semibold inline-flex items-center gap-0.5 cursor-pointer"
+                    type="button"
+                    onClick={() => setIsHodAuthModalOpen(true)}
+                    className="w-full min-h-[48px] px-4 bg-slate-900 hover:bg-slate-800 active:bg-slate-950 text-white font-bold text-xs sm:text-sm rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2.5"
                   >
-                    <span>HoD View</span>
-                    <ChevronRight className="w-3.5 h-3.5" />
+                    <div className="w-5 h-5 rounded-full bg-white flex items-center justify-center shrink-0">
+                      <svg className="w-3 h-3" viewBox="0 0 24 24">
+                        <path
+                          fill="#4285F4"
+                          d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                        />
+                        <path
+                          fill="#34A853"
+                          d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                        />
+                        <path
+                          fill="#FBBC05"
+                          d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                        />
+                        <path
+                          fill="#EA4335"
+                          d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                        />
+                      </svg>
+                    </div>
+                    <span>Sign in with Google (Firebase Auth)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('tracker')}
+                    className="w-full min-h-[44px] px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-xl transition-colors cursor-pointer"
+                  >
+                    Back to Faculty Portal
                   </button>
                 </div>
-
-                <div className="divide-y divide-slate-100 text-xs">
-                  {logs.slice(0, 3).map((log) => (
-                    <div key={log.id} className="py-2.5 flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="font-bold text-slate-900 truncate">
-                          {log.employeeName}
-                        </div>
-                        <div className="text-[11px] text-slate-500">
-                          {log.date} • {log.totalFilledSlots}/7 slots
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <span
-                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                            log.hodStatus === 'Approved'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {log.hodStatus || 'Under Review'}
-                        </span>
-                        <button
-                          onClick={() => handlePrintIndividualLog(log)}
-                          className="p-1.5 text-slate-500 hover:text-slate-800 bg-slate-100 rounded-lg cursor-pointer"
-                          title="Print sheet"
-                        >
-                          <Printer className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            </>
-          ) : !hodAdminEmail ? (
-            /* HoD Protected Access Gate */
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm text-center space-y-4 my-8">
-              <div className="w-14 h-14 mx-auto rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600">
-                <FileCheck2 className="w-7 h-7" />
               </div>
-              <div>
-                <h2 className="text-base font-bold text-slate-900">HoD & Administrator Access</h2>
-                <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
-                  Access to departmental approvals, verification, and print rosters is restricted to verified administrators.
-                </p>
-              </div>
-              <div className="pt-2 flex flex-col gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsHodAuthModalOpen(true)}
-                  className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
-                >
-                  Verify Administrator Email
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('tracker')}
-                  className="w-full py-2 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-xl transition-colors cursor-pointer"
-                >
-                  Back to Faculty Portal
-                </button>
-              </div>
-            </div>
-          ) : (
-            /* HoD Dashboard View */
-            <HodDashboardView
-              logs={logs}
-              adminEmail={hodAdminEmail}
-              onLogoutHod={handleHodLogout}
-              onUpdateLogStatus={handleUpdateLogStatus}
-              onPrintLog={handlePrintIndividualLog}
-              onPrintDailySummary={handlePrintDailySummary}
-              onRestoreSamples={handleRestoreSamples}
-              onOpenGoogleSheetsSettings={() => setIsSheetsModalOpen(true)}
-              onSyncLogToSheets={handleSyncLogToSheets}
-              isGoogleSheetsConfigured={Boolean(googleSheetsUrl.trim())}
-            />
+            ) : (
+              /* HoD Dashboard View */
+              <HodDashboardView
+                logs={logs}
+                adminEmail={hodAdminEmail}
+                onLogoutHod={handleHodLogout}
+                onUpdateLogStatus={handleUpdateLogStatus}
+                onPrintLog={handlePrintIndividualLog}
+                onPrintDailySummary={handlePrintDailySummary}
+                onRestoreSamples={handleRestoreSamples}
+                onOpenGoogleSheetsSettings={() => setIsSheetsModalOpen(true)}
+                onSyncLogToSheets={handleSyncLogToSheets}
+                isGoogleSheetsConfigured={Boolean(googleSheetsUrl.trim())}
+              />
+            )
           )}
         </main>
 
         {/* Sticky Thumb-Friendly Bottom Action Bar (in Tracker mode) */}
         {activeTab === 'tracker' && (
           <div className="fixed bottom-0 left-0 right-0 z-30 flex justify-center pointer-events-none p-3 pb-4">
-            <div className="w-full max-w-md bg-white/95 backdrop-blur-md rounded-2xl border border-slate-300/80 shadow-2xl p-2.5 flex items-center gap-2 pointer-events-auto">
+            <div className="w-full max-w-xl bg-white/95 backdrop-blur-md rounded-2xl border border-slate-300/80 shadow-2xl p-2.5 flex items-center gap-2 pointer-events-auto">
               {/* Reset entries button */}
               <button
                 type="button"
                 onClick={handleResetCurrentActivities}
-                className="w-11 h-11 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 transition-colors cursor-pointer shrink-0"
+                className="w-12 min-h-[48px] rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 transition-colors cursor-pointer shrink-0"
                 title="Reset draft activities for this date"
               >
                 <RotateCcw className="w-4 h-4" />
               </button>
 
-              {/* Sheets Settings Button */}
-              <button
-                type="button"
-                onClick={() => setIsSheetsModalOpen(true)}
-                className={`w-11 h-11 rounded-xl flex items-center justify-center border transition-colors cursor-pointer shrink-0 ${
-                  googleSheetsUrl.trim()
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
-                    : 'bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100'
-                }`}
-                title="Google Sheets Sync Settings"
-              >
-                <FileSpreadsheet className="w-4 h-4" />
-              </button>
+              {/* Sheets Settings Button (STRICTLY for logged-in Admin/HoD only) */}
+              {Boolean(hodAdminEmail && isEmailAuthorized(hodAdminEmail)) && (
+                <button
+                  type="button"
+                  onClick={() => setIsSheetsModalOpen(true)}
+                  className={`w-12 min-h-[48px] rounded-xl flex items-center justify-center border transition-colors cursor-pointer shrink-0 ${
+                    isGoogleSheetsConfigured
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
+                      : 'bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100'
+                  }`}
+                  title="Google Sheets Sync Settings (Admin Only)"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                </button>
+              )}
 
               {/* Print / Export Report Button */}
               <button
                 type="button"
                 onClick={handleOpenPrintReport}
-                className="min-h-[46px] px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer active:scale-95 shrink-0"
+                className="min-h-[48px] px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer active:scale-95 shrink-0"
                 title="Print official report"
               >
                 <Printer className="w-4 h-4" />
@@ -1199,7 +1454,7 @@ export default function App() {
                 type="button"
                 disabled={isSubmittingToSheets}
                 onClick={handleSubmitTodaysLog}
-                className="min-h-[46px] flex-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-98 disabled:opacity-75 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md cursor-pointer"
+                className="min-h-[48px] flex-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-98 disabled:opacity-75 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all shadow-md cursor-pointer px-3"
               >
                 {isSubmittingToSheets ? (
                   <>
@@ -1209,7 +1464,7 @@ export default function App() {
                 ) : (
                   <>
                     <Send className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">Submit Today&apos;s Log ({filledSlotsCount}/7)</span>
+                    <span className="truncate">Submit Today&apos;s Log ({filledSlotsCount}/{BASE_TIME_SLOTS.length})</span>
                   </>
                 )}
               </button>
@@ -1219,35 +1474,49 @@ export default function App() {
 
         {/* Toast Feedback Notification */}
         {toastMessage && (
-          <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 w-11/12 max-w-sm animate-in fade-in slide-in-from-top-2 duration-200">
+          <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 w-11/12 max-w-md animate-in fade-in slide-in-from-top-2 duration-200">
             <div
-              className={`p-3 rounded-xl shadow-lg border text-xs font-semibold flex items-center justify-between gap-2 ${
+              className={`p-3.5 rounded-2xl shadow-xl border text-xs font-semibold flex items-start justify-between gap-2.5 ${
                 toastMessage.type === 'success'
-                  ? 'bg-slate-900 text-white border-slate-800'
+                  ? 'bg-slate-900 text-white border-slate-700 shadow-emerald-950/20'
                   : toastMessage.type === 'error'
-                  ? 'bg-rose-900 text-white border-rose-800'
-                  : 'bg-blue-600 text-white border-blue-700'
+                  ? 'bg-rose-950 text-rose-100 border-rose-800 shadow-rose-950/20'
+                  : 'bg-slate-900 text-slate-100 border-blue-600 shadow-blue-950/20'
               }`}
             >
-              <div className="flex items-center gap-2 min-w-0">
+              <div className="flex items-start gap-2.5 min-w-0 flex-1">
                 {toastMessage.type === 'success' ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                ) : toastMessage.type === 'error' ? (
+                  <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
                 ) : (
-                  <Check className="w-4 h-4 text-blue-200 shrink-0" />
+                  <CloudUpload className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" />
                 )}
-                <span className="leading-snug truncate">{toastMessage.text}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="leading-relaxed break-words text-[12px]">{toastMessage.text}</p>
+                </div>
               </div>
-              {toastMessage.link && (
-                <a
-                  href={toastMessage.link}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-2.5 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-md text-[11px] shrink-0 inline-flex items-center gap-1 shadow-xs cursor-pointer"
+              <div className="flex items-center gap-1.5 shrink-0 self-start">
+                {toastMessage.link && (
+                  <a
+                    href={toastMessage.link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2.5 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-lg text-[11px] shrink-0 inline-flex items-center gap-1 shadow-xs cursor-pointer"
+                  >
+                    <span>{toastMessage.linkText || 'Open'}</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setToastMessage(null)}
+                  className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                  title="Dismiss notification"
                 >
-                  <span>{toastMessage.linkText || 'Open'}</span>
-                  <ExternalLink className="w-3 h-3" />
-                </a>
-              )}
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -1257,6 +1526,7 @@ export default function App() {
           isOpen={isSheetsModalOpen}
           onClose={() => setIsSheetsModalOpen(false)}
           logs={logs}
+          currentFacultyName={employeeName.trim()}
           onConfigChanged={() => {
             setGoogleSheetsUrl(getStoredSheetsUrl());
             setSpreadsheetId(getStoredSpreadsheetId());

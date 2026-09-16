@@ -12,7 +12,7 @@ export {
   findFacultyProfile,
   FACULTY_TIMETABLE_JSON_DICTIONARY,
 };
-export type { MasterFacultyProfile };
+export type { MasterFacultyProfile, DayKey, SlotKey };
 
 export interface SubjectAllocation {
   code: string;
