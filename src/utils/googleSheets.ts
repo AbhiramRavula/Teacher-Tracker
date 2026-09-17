@@ -451,24 +451,24 @@ export { exportMultiTabGrandExcel };
  * duplicate tab prevention, and duplicate row idempotency.
  */
 export const SAMPLE_APPS_SCRIPT_CODE = `/**
- * Google Apps Script - Faculty Daily Activity Tracker
- * Enterprise Edition with Concurrency Locking & Zero-Duplicate Tab Guarantee
+ * Google Apps Script - Faculty & Staff Daily Activity Tracker
+ * Production Edition: 100% Append-Only Persistence & Concurrency Locking
  *
- * FEATURES:
- * 1. ScriptLock prevents concurrent race conditions across simultaneous faculty submissions.
- * 2. Case-insensitive, whitespace-normalized matching guarantees zero duplicate tab creation.
- * 3. Idempotent row insertion prevents duplicate duty entries if faculty resubmits or network retries.
- * 4. Automatically maintains both individual Faculty tabs and the consolidated Grand_Daily_Report.
+ * GUARANTEES:
+ * 1. ZERO DATA LOSS (APPEND-ONLY): Every submission is appended strictly to the bottom
+ *    of the individual faculty tab and the Master_Daily_Report (getLastRow() + 1).
+ *    Existing historical logs from previous dates are NEVER deleted, cleared, or overwritten.
+ * 2. CONCURRENCY MUTEX: ScriptLock safely sequences concurrent submissions.
+ * 3. ZERO DUPLICATE TABS: Case-insensitive, whitespace-normalized lookup finds existing tabs.
  *
  * HOW TO DEPLOY:
- * 1. Open your plain Google Sheet.
+ * 1. Open your Google Sheet.
  * 2. Click Extensions > Apps Script.
- * 3. Delete any default code and paste this entire script.
- * 4. Click Deploy > New deployment.
- * 5. Select type: "Web app".
- * 6. Set "Execute as": "Me".
- * 7. Set "Who has access": "Anyone".
- * 8. Click "Deploy", authorize permissions, and copy the Web app URL.
+ * 3. Delete any previous code and paste this entire script.
+ * 4. Click Deploy > Manage deployments > Edit (or Deploy > New deployment).
+ * 5. Set "Execute as": "Me".
+ * 6. Set "Who has access": "Anyone".
+ * 7. Click "Deploy", authorize permissions, and copy the Web App URL (ends in /exec).
  */
 
 function doPost(e) {
@@ -500,26 +500,25 @@ function doPost(e) {
     }
 
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-
-    // 1. Get or create faculty tab with bulletproof duplicate prevention
-    var tabResult = getOrCreateFacultySheet(ss, facultyName);
-    var sheet = tabResult.sheet;
-    var safeTabName = sheet.getName();
-
     var now = new Date();
     var dayOfWeek = Utilities.formatDate(new Date(date + "T00:00:00"), Session.getScriptTimeZone(), "EEEE");
     var timestampStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
 
-    // 2. Write to Faculty Personal Tab: New distinct table for this single day
-    syncFacultyDailyTable(sheet, date, dayOfWeek, logs, timestampStr);
+    // 1. Get or create faculty personal tab (Zero duplicate tabs)
+    var tabResult = getOrCreateFacultySheet(ss, facultyName);
+    var facultySheet = tabResult.sheet;
+    var safeTabName = facultySheet.getName();
 
-    // 3. Write to Grand_Daily_Report: New distinct table for this single day
-    var grandSheet = getOrCreateGrandReportSheet(ss);
-    syncGrandDailyTable(grandSheet, date, dayOfWeek, facultyName, logs);
+    // 2. Append rows to Faculty Personal Tab (STRICTLY APPEND-ONLY at getLastRow() + 1)
+    appendFacultyLogRows(facultySheet, date, dayOfWeek, logs, timestampStr);
+
+    // 3. Append rows to Master_Daily_Report (STRICTLY APPEND-ONLY at getLastRow() + 1)
+    var masterSheet = getOrCreateMasterReportSheet(ss);
+    appendMasterReportRows(masterSheet, date, dayOfWeek, facultyName, logs, timestampStr);
 
     return createJsonResponse({
       status: "success",
-      message: "Successfully synchronized " + logs.length + " activities for " + facultyName + " on tab '" + safeTabName + "' & Grand_Daily_Report (Dual-Entry Daily Tables)",
+      message: "Successfully recorded " + logs.length + " activities for " + facultyName + " on tab '" + safeTabName + "' & Master_Daily_Report (Append-Only)",
       faculty: facultyName,
       sheetTab: safeTabName,
       rowsAdded: logs.length,
@@ -539,37 +538,26 @@ function doPost(e) {
 }
 
 /**
- * Creates or updates a distinct table for every single day on the Faculty Personal Sheet
+ * Appends duty log rows strictly to the bottom of the faculty member's personal sheet tab.
+ * Never touches or overwrites existing historical rows.
  */
-function syncFacultyDailyTable(sheet, date, dayOfWeek, logs, timestampStr) {
+function appendFacultyLogRows(sheet, date, dayOfWeek, logs, timestampStr) {
   var lastRow = sheet.getLastRow();
-  var data = lastRow > 0 ? sheet.getRange(1, 1, lastRow, 9).getValues() : [];
-
-  var dayBorder = '═══════════════════════════════════════════════════════════════════════════════════';
-  var dayBanner = '📅 DATE: ' + date + ' (' + dayOfWeek.toUpperCase() + ') — FACULTY ACTIVITY REPORT';
-  var dayDivider = '────────────────── End of Daily Activity Report for ' + date + ' (' + logs.length + ' Slots Logged) ──────────────────';
-
-  var dayHeaders = ['SNO', 'Date', 'Class Hour / Slot', 'Section', 'Course Name', 'Credits', 'Unit No', 'Topic Name / Activity Covered', 'Status'];
-
-  // Check if a table for this date already exists
-  var dateTableIdx = -1;
-  for (var r = 0; r < data.length; r++) {
-    var cellA = (data[r][0] || "").toString();
-    if (cellA.indexOf(date) !== -1 && (cellA.indexOf("DATE:") !== -1 || cellA.indexOf("REPORT") !== -1)) {
-      dateTableIdx = r + 1; // 1-based index of banner
-      break;
-    }
+  if (lastRow === 0) {
+    formatFacultySheetHeaders(sheet);
+    lastRow = 1;
   }
 
-  var dutyRows = [];
+  var rowsToAppend = [];
   for (var i = 0; i < logs.length; i++) {
     var item = logs[i];
-    dutyRows.push([
-      i + 1,
+    rowsToAppend.push([
+      timestampStr,
       date,
-      (item.slot || "P" + (i + 1)).trim(),
-      (item.section || "").trim(),
+      dayOfWeek,
+      (item.slot || ("P" + (i + 1))).trim(),
       (item.courseName || item.course || "").trim(),
+      (item.section || "").trim(),
       (item.credits || "").toString().trim(),
       (item.unitNo || item.unit || "").toString().trim(),
       (item.topicName || item.activity || "").trim(),
@@ -577,136 +565,53 @@ function syncFacultyDailyTable(sheet, date, dayOfWeek, logs, timestampStr) {
     ]);
   }
 
-  if (dateTableIdx === -1) {
-    // Brand new table for this date
-    var tableRows = [];
-    tableRows.push([dayBorder, "", "", "", "", "", "", "", ""]);
-    tableRows.push([dayBanner, "", "", "", "", "", "", "", ""]);
-    tableRows.push([dayBorder, "", "", "", "", "", "", "", ""]);
-    tableRows.push(dayHeaders);
-
-    for (var d = 0; d < dutyRows.length; d++) {
-      tableRows.push(dutyRows[d]);
-    }
-    tableRows.push([dayDivider, "", "", "", "", "", "", "", ""]);
-    tableRows.push(["", "", "", "", "", "", "", "", ""]);
-
-    var startRow = lastRow > 0 ? lastRow + 2 : 1;
-    var range = sheet.getRange(startRow, 1, tableRows.length, 9);
-    range.setValues(tableRows);
-
-    // Banner formatting: distinct high-contrast slate navy
-    sheet.getRange(startRow + 1, 1, 1, 9).setFontWeight("bold").setBackground("#0F172A").setFontColor("#FFFFFF").setHorizontalAlignment("left");
-    // Column headers formatting
-    sheet.getRange(startRow + 3, 1, 1, 9).setFontWeight("bold").setBackground("#E2E8F0").setFontColor("#0F172A").setHorizontalAlignment("center");
-  } else {
-    // Existing day table -> update rows in place without losing any previously logged slots
-    var dataStartRow = dateTableIdx + 3; // after borders and header
-    if (dutyRows.length > 0) {
-      sheet.getRange(dataStartRow, 1, dutyRows.length, 9).setValues(dutyRows);
-    }
+  if (rowsToAppend.length > 0) {
+    var targetStartRow = lastRow + 1;
+    var range = sheet.getRange(targetStartRow, 1, rowsToAppend.length, 10);
+    range.setValues(rowsToAppend);
   }
 }
 
 /**
- * Creates or updates a distinct table for every single day on the Grand Daily Report Sheet
+ * Appends duty log rows strictly to the bottom of the Master_Daily_Report sheet.
+ * Never touches or overwrites existing historical rows.
  */
-function syncGrandDailyTable(grandSheet, date, dayOfWeek, facultyName, logs) {
-  var lastRow = grandSheet.getLastRow();
-  var data = lastRow > 0 ? grandSheet.getRange(1, 1, lastRow, 9).getValues() : [];
-
-  var grandBorder = '🏛️═════════════════════════════════════════════════════════════════════════════════';
-  var grandBanner = '📅 DEPARTMENT OF INFORMATION TECHNOLOGY — GRAND DAILY REPORT | Date: ' + date + ' (' + dayOfWeek.toUpperCase() + ')';
-  var grandDivider = '────────────────── End of Grand Daily Register for ' + date + ' ──────────────────';
-
-  var grandHeaders = ['SNO', 'Date', 'Name of the Faculty', 'Section', 'Course Name', 'Credits', 'Class Hour / Slot', 'Unit No', 'Topic Name / Duty Details'];
-
-  var dateTableIdx = -1;
-  var dateTableEndIdx = -1;
-
-  for (var r = 0; r < data.length; r++) {
-    var cellA = (data[r][0] || "").toString();
-    if (cellA.indexOf("GRAND DAILY REPORT") !== -1 && cellA.indexOf(date) !== -1) {
-      dateTableIdx = r + 1;
-      for (var k = r + 1; k < data.length; k++) {
-        var rowValA = (data[k][0] || "").toString();
-        if (rowValA.indexOf("End of Grand Daily Register") !== -1) {
-          dateTableEndIdx = k + 1;
-          break;
-        }
-      }
-      if (dateTableEndIdx === -1) dateTableEndIdx = lastRow;
-      break;
-    }
+function appendMasterReportRows(masterSheet, date, dayOfWeek, facultyName, logs, timestampStr) {
+  var lastRow = masterSheet.getLastRow();
+  if (lastRow < 3) {
+    formatMasterReportHeaders(masterSheet);
+    lastRow = masterSheet.getLastRow();
   }
 
-  // Build this faculty's duty rows
-  var thisFacultyDutyRows = [];
+  // Calculate starting S.No based on existing data rows (excluding 3 header rows)
+  var currentDataRowsCount = Math.max(0, lastRow - 3);
+
+  var masterRows = [];
   for (var i = 0; i < logs.length; i++) {
     var itm = logs[i];
-    thisFacultyDutyRows.push([
-      0,
+    masterRows.push([
+      currentDataRowsCount + i + 1,
+      timestampStr,
       date,
       facultyName,
-      (itm.section || "III A").trim(),
-      (itm.courseName || itm.course || "Course").trim(),
+      (itm.section || "").trim(),
+      (itm.courseName || itm.course || "").trim(),
       (itm.credits || "3").toString().trim(),
-      (itm.slot || "P" + (i + 1)).trim(),
-      (itm.unitNo || itm.unit || "1").toString().trim(),
+      (itm.slot || ("P" + (i + 1))).trim(),
+      (itm.unitNo || itm.unit || "").toString().trim(),
       (itm.topicName || itm.activity || "").trim()
     ]);
   }
 
-  if (dateTableIdx === -1) {
-    // Brand new table for this date on Grand Daily Report
-    var grandTableRows = [];
-    grandTableRows.push([grandBorder, "", "", "", "", "", "", "", ""]);
-    grandTableRows.push([grandBanner, "", "", "", "", "", "", "", ""]);
-    grandTableRows.push([grandBorder, "", "", "", "", "", "", "", ""]);
-    grandTableRows.push(grandHeaders);
-
-    for (var m = 0; m < thisFacultyDutyRows.length; m++) {
-      thisFacultyDutyRows[m][0] = m + 1;
-      grandTableRows.push(thisFacultyDutyRows[m]);
-    }
-    grandTableRows.push([grandDivider, "", "", "", "", "", "", "", ""]);
-    grandTableRows.push(["", "", "", "", "", "", "", "", ""]);
-
-    var startRow = lastRow > 0 ? lastRow + 2 : 1;
-    var range = grandSheet.getRange(startRow, 1, grandTableRows.length, 9);
-    range.setValues(grandTableRows);
-
-    // Banner formatting
-    grandSheet.getRange(startRow + 1, 1, 1, 9).setFontWeight("bold").setBackground("#1E293B").setFontColor("#FFFFFF").setHorizontalAlignment("left");
-    // Column headers formatting
-    grandSheet.getRange(startRow + 3, 1, 1, 9).setFontWeight("bold").setBackground("#CBD5E1").setFontColor("#0F172A").setHorizontalAlignment("center");
-  } else {
-    // Day table already exists -> Append or update without duplicating this faculty or losing other faculty entries
-    var otherFacultyRows = [];
-    if (dateTableIdx !== -1) {
-      for (var rowIdx = dateTableIdx + 3; rowIdx < (dateTableEndIdx || lastRow); rowIdx++) {
-        var row = data[rowIdx - 1];
-        if (!row || !row[2]) continue;
-        var fName = (row[2] || "").toString().trim();
-        if (fName.toLowerCase() !== facultyName.toLowerCase()) {
-          otherFacultyRows.push(row);
-        }
-      }
-    }
-
-    var combined = otherFacultyRows.concat(thisFacultyDutyRows);
-    for (var c = 0; c < combined.length; c++) {
-      combined[c][0] = c + 1;
-    }
-
-    var insertStartRow = dateTableIdx + 4;
-    grandSheet.getRange(insertStartRow, 1, combined.length, 9).setValues(combined);
+  if (masterRows.length > 0) {
+    var targetStartRow = lastRow + 1;
+    var range = masterSheet.getRange(targetStartRow, 1, masterRows.length, 10);
+    range.setValues(masterRows);
   }
 }
 
 /**
  * Normalizes tab names for robust, case-insensitive comparison.
- * Collapses whitespace, removes punctuation and invalid sheet characters: : \\ / ? * [ ] '
  */
 function normalizeTabKey(name) {
   if (!name) return "";
@@ -719,7 +624,7 @@ function normalizeTabKey(name) {
 }
 
 /**
- * Formats a user-friendly display tab title within Google Sheets 100-char limits
+ * Formats a user-friendly display tab title within Google Sheets 100-char limits.
  */
 function sanitizeTabTitle(name) {
   if (!name) return "General Staff";
@@ -761,7 +666,6 @@ function getOrCreateFacultySheet(ss, facultyName) {
     formatFacultySheetHeaders(newSheet);
     return { sheet: newSheet, isNew: true };
   } catch (e) {
-    // Edge case fallback: if another thread or transient naming collision occurred, re-verify with getSheetByName
     var fallback = ss.getSheetByName(displayTitle);
     if (fallback) {
       return { sheet: fallback, isNew: false };
@@ -817,39 +721,9 @@ function formatFacultySheetHeaders(sheet) {
 }
 
 /**
- * Reads existing Date + Slot combinations on a faculty sheet to prevent duplicates
- */
-function getExistingFacultySlotKeys(sheet, targetDate) {
-  var slotMap = {};
-  var lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return slotMap;
-
-  // Read Date (col 2) and Period Slot (col 4)
-  var numRows = lastRow - 1;
-  var dateValues = sheet.getRange(2, 2, numRows, 1).getValues();
-  var slotValues = sheet.getRange(2, 4, numRows, 1).getValues();
-
-  for (var r = 0; r < numRows; r++) {
-    var rawDate = dateValues[r][0];
-    var formattedDate = rawDate instanceof Date
-      ? Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "yyyy-MM-dd")
-      : (rawDate ? rawDate.toString().trim() : "");
-
-    if (formattedDate === targetDate) {
-      var slotCode = (slotValues[r][0] || "").toString().trim().toLowerCase();
-      if (slotCode) {
-        slotMap[formattedDate + "|" + slotCode] = true;
-      }
-    }
-  }
-
-  return slotMap;
-}
-
-/**
  * Gets or creates the official institutional Master_Daily_Report tab
  */
-function getOrCreateGrandReportSheet(ss) {
+function getOrCreateMasterReportSheet(ss) {
   // 1. Direct fast lookup with ss.getSheetByName()
   var directMaster = ss.getSheetByName("Master_Daily_Report") || ss.getSheetByName("Grand_Daily_Report");
   if (directMaster) {
@@ -867,16 +741,22 @@ function getOrCreateGrandReportSheet(ss) {
   }
 
   var masterSheet = ss.insertSheet("Master_Daily_Report", 0);
-  masterSheet.getRange("A1:I1").merge().setValue("Matrusri Engineering College").setFontWeight("bold").setBackground("#F8CECC").setHorizontalAlignment("center");
-  masterSheet.getRange("A2:I2").merge().setValue("Department of Information Technology - Daily Faculty Activity Register").setFontWeight("bold").setBackground("#F8CECC").setHorizontalAlignment("center");
+  formatMasterReportHeaders(masterSheet);
+  return masterSheet;
+}
+
+function formatMasterReportHeaders(masterSheet) {
+  masterSheet.getRange("A1:J1").merge().setValue("Matrusri Engineering College").setFontWeight("bold").setBackground("#F8CECC").setHorizontalAlignment("center");
+  masterSheet.getRange("A2:J2").merge().setValue("Department of Information Technology - Master Faculty Activity Register (Append-Only)").setFontWeight("bold").setBackground("#F8CECC").setHorizontalAlignment("center");
 
   var mHeaders = [
     "SNO",
+    "Timestamp",
     "Date",
     "Name of the Faculty",
     "Section",
     "Course Name",
-    "credits",
+    "Credits",
     "Class Hour",
     "Unit No",
     "Topic Name"
@@ -891,22 +771,21 @@ function getOrCreateGrandReportSheet(ss) {
   masterSheet.setFrozenRows(3);
 
   masterSheet.setColumnWidth(1, 60);
-  masterSheet.setColumnWidth(2, 100);
-  masterSheet.setColumnWidth(3, 180);
-  masterSheet.setColumnWidth(4, 90);
-  masterSheet.setColumnWidth(5, 120);
-  masterSheet.setColumnWidth(6, 70);
-  masterSheet.setColumnWidth(7, 90);
-  masterSheet.setColumnWidth(8, 70);
-  masterSheet.setColumnWidth(9, 360);
-
-  return masterSheet;
+  masterSheet.setColumnWidth(2, 160);
+  masterSheet.setColumnWidth(3, 100);
+  masterSheet.setColumnWidth(4, 180);
+  masterSheet.setColumnWidth(5, 90);
+  masterSheet.setColumnWidth(6, 120);
+  masterSheet.setColumnWidth(7, 70);
+  masterSheet.setColumnWidth(8, 90);
+  masterSheet.setColumnWidth(9, 70);
+  masterSheet.setColumnWidth(10, 360);
 }
 
 function doGet(e) {
   return createJsonResponse({
     status: "active",
-    message: "Faculty Activity Tracker Google Sheets Endpoint is running with Zero-Duplicate tab protection.",
+    message: "Faculty Activity Tracker Google Sheets Endpoint is running with 100% Append-Only Zero Data Loss protection.",
     activeSpreadsheet: SpreadsheetApp.getActiveSpreadsheet().getName()
   });
 }
@@ -916,3 +795,4 @@ function createJsonResponse(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 `;
+

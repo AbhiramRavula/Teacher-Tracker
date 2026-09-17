@@ -676,7 +676,7 @@ export default function App() {
     // Dispatches log via Public Google Apps Script Web App (zero auth) or Direct API
     setIsSubmittingToSheets(true);
     setToastMessage({
-      text: `Syncing ${filledSlotsCount} duties for ${employeeName.trim()} to personal tab & Grand Daily Report (new daily table)...`,
+      text: `Syncing ${filledSlotsCount} duties for ${employeeName.trim()} to personal tab & Master Daily Report (Append-Only)...`,
       type: 'info',
     });
 
@@ -696,7 +696,7 @@ export default function App() {
 
       if (result.success) {
         setToastMessage({
-          text: `Daily log saved & synced! Recorded ${filledSlotsCount} activities for ${employeeName.trim()} in personal tab "${result.tabName || employeeName.trim()}" & Grand Daily Report (New table for ${date})!`,
+          text: `Daily log safely saved & appended! Added ${filledSlotsCount} activities for ${employeeName.trim()} to tab "${result.tabName || employeeName.trim()}" & Master Daily Report (All history preserved)!`,
           type: 'success',
           link: result.spreadsheetUrl,
           linkText: 'Open in Sheets',

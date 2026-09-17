@@ -659,149 +659,50 @@ export async function syncFacultyLogsDirectToGoogleSheet(
     };
   }
 
-  // 3. FACULTY PERSONAL TAB: Create or update a distinct, easily distinguishable table for every single day
-  let updatedRange = `${cleanTabName}!A1:I`;
+  const now = new Date();
+  const timestampStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+    now.getDate()
+  ).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(
+    2,
+    '0'
+  )}:${String(now.getSeconds()).padStart(2, '0')}`;
+
+  // 3. FACULTY PERSONAL TAB: Strictly APPEND new rows to the bottom (Zero Data Loss)
+  const facultyRowsToAppend: (string | number)[][] = payload.logs.map((item, idx) => [
+    timestampStr,
+    payload.date,
+    dayOfWeek,
+    (item.slot || `P${idx + 1}`).trim(),
+    (item.courseName || '').trim(),
+    (item.section || '').trim(),
+    (item.credits || '').toString().trim(),
+    (item.unitNo || '').toString().trim(),
+    (item.topicName || item.activity || '').trim(),
+    'Submitted',
+  ]);
 
   try {
-    // Read existing content on faculty tab to inspect date tables
-    const existingCheckUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${formatA1Range(
+    const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${formatA1Range(
       cleanTabName,
-      'A:I'
-    )}`;
-    const existingRes = await fetchSheetsWithRetry(existingCheckUrl, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+      'A:J'
+    )}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
 
-    const existingRows: string[][] = existingRes.ok
-      ? ((await existingRes.json()).values as string[][]) || []
-      : [];
-
-    // Format this day's distinct table block:
-    // 1. Top visual border
-    // 2. High-visibility Date banner with day of week & faculty name
-    // 3. Sub-border
-    // 4. Clear uppercase column headers
-    // 5..N. Data rows
-    // N+1. Clean closing divider
-    // N+2. Empty spacer row
-    const dayBorder = '═══════════════════════════════════════════════════════════════════════════════════';
-    const dayBanner = `📅 DATE: ${payload.date} (${dayOfWeek.toUpperCase()}) — FACULTY ACTIVITY REPORT: ${cleanTabName.toUpperCase()}`;
-    const dayDivider = `────────────────── End of Daily Activity Report for ${payload.date} (${payload.logs.length} Slots Logged) ──────────────────`;
-
-    const dayHeaders = [
-      'SNO',
-      'Date',
-      'Class Hour / Slot',
-      'Section',
-      'Course Name',
-      'Credits',
-      'Unit No',
-      'Topic Name / Activity Covered',
-      'Status',
-    ];
-
-    // Build incoming duty rows mapped by slot
-    const incomingSlotsMap: Record<string, typeof payload.logs[0]> = {};
-    payload.logs.forEach((item) => {
-      const slotKey = (item.slot || '').trim().toLowerCase();
-      incomingSlotsMap[slotKey] = item;
-    });
-
-    // Locate existing date table if present
-    let bannerRowIdx = -1; // 0-based
-    let endRowIdx = -1;    // 0-based
-
-    for (let r = 0; r < existingRows.length; r++) {
-      const cellA = (existingRows[r]?.[0] || '').toString();
-      if (cellA.includes(payload.date) && (cellA.includes('DATE:') || cellA.includes('REPORT'))) {
-        bannerRowIdx = r;
-        // Find end of this day's section (next banner or end divider or next date)
-        for (let k = r + 1; k < existingRows.length; k++) {
-          const nextCellA = (existingRows[k]?.[0] || '').toString();
-          if (nextCellA.includes('End of Daily Activity Report') || nextCellA.includes('End of Report')) {
-            endRowIdx = k + 1; // include divider
-            break;
-          }
-          if (nextCellA.includes('DATE:') && nextCellA.includes('REPORT')) {
-            endRowIdx = k - 1;
-            break;
-          }
-        }
-        if (endRowIdx === -1) endRowIdx = existingRows.length - 1;
-        break;
-      }
-    }
-
-    // Prepare final duty rows for this day (merging existing slots so no entered slot is ever lost)
-    const finalDutyRows: (string | number)[][] = [];
-
-    payload.logs.forEach((item, idx) => {
-      finalDutyRows.push([
-        idx + 1,
-        payload.date,
-        item.slot,
-        item.section || '',
-        item.courseName || '',
-        item.credits || '',
-        item.unitNo || '',
-        item.topicName || item.activity || '',
-        'Submitted',
-      ]);
-    });
-
-    const newDayTable: (string | number)[][] = [
-      [dayBorder, '', '', '', '', '', '', '', ''],
-      [dayBanner, '', '', '', '', '', '', '', ''],
-      [dayBorder, '', '', '', '', '', '', '', ''],
-      dayHeaders,
-      ...finalDutyRows,
-      [dayDivider, '', '', '', '', '', '', '', ''],
-      ['', '', '', '', '', '', '', '', ''],
-    ];
-
-    let fullFacultyRows: (string | number)[][] = [];
-
-    if (bannerRowIdx === -1) {
-      // Append new day table cleanly at the end of existing rows
-      fullFacultyRows = [...existingRows];
-      if (fullFacultyRows.length > 0) {
-        // Ensure separation from previous day
-        fullFacultyRows.push(['', '', '', '', '', '', '', '', '']);
-      }
-      fullFacultyRows.push(...newDayTable);
-    } else {
-      // Replace existing day section in-place, preserving other days before and after
-      const topSection = existingRows.slice(0, Math.max(0, bannerRowIdx - 1)); // keep before top border
-      const bottomSection = existingRows.slice(endRowIdx + 1);
-      fullFacultyRows = [...topSection, ...newDayTable, ...bottomSection];
-    }
-
-    // Write full updated faculty tab content
-    const writeUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${formatA1Range(
-      cleanTabName,
-      `A1:I${fullFacultyRows.length}`
-    )}?valueInputOption=USER_ENTERED`;
-
-    await fetchSheetsWithRetry(writeUrl, {
-      method: 'PUT',
+    await fetchSheetsWithRetry(appendUrl, {
+      method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        range: `'${cleanTabName}'!A1:I${fullFacultyRows.length}`,
-        majorDimension: 'ROWS',
-        values: fullFacultyRows,
+        values: facultyRowsToAppend,
       }),
     });
-
-    updatedRange = `'${cleanTabName}'!A1:I${fullFacultyRows.length}`;
   } catch (facultyErr) {
-    console.warn('[GoogleSheets] Faculty personal tab write note:', facultyErr);
+    console.warn('[GoogleSheets] Faculty personal tab append note:', facultyErr);
   }
 
-  // 4. GRAND DAILY REPORT SHEET: Create or update distinct table for every single day
-  let grandTabName = 'Grand_Daily_Report';
+  // 4. MASTER DAILY REPORT SHEET: Strictly APPEND new rows to the bottom (Zero Data Loss)
+  let grandTabName = 'Master_Daily_Report';
   try {
     const meta = await fetchSpreadsheetMetadata(accessToken, spreadsheetId).catch(() => null);
     if (meta && meta.sheets) {
@@ -814,200 +715,63 @@ export async function syncFacultyLogsDirectToGoogleSheet(
       }
     }
 
-    // Read all existing rows on Grand Daily Report
-    let existingGrandRows: string[][] = [];
+    // Read current row count to calculate sequential S.No
+    let currentLastRow = 3;
     try {
       const grandCheckRes = await fetchSheetsWithRetry(
         `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${formatA1Range(
           grandTabName,
-          'A:I'
+          'A:A'
         )}`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
       if (grandCheckRes.ok) {
-        existingGrandRows = ((await grandCheckRes.json()).values as string[][]) || [];
+        const rows = ((await grandCheckRes.json()).values as string[][]) || [];
+        currentLastRow = Math.max(3, rows.length);
       }
     } catch {
-      existingGrandRows = [];
+      currentLastRow = 3;
     }
 
-    const grandBorder = '🏛️═════════════════════════════════════════════════════════════════════════════════';
-    const grandBanner = `📅 DEPARTMENT OF INFORMATION TECHNOLOGY — GRAND DAILY REPORT | Date: ${payload.date} (${dayOfWeek.toUpperCase()})`;
-    const grandDivider = `────────────────── End of Grand Daily Register for ${payload.date} ──────────────────`;
+    const startSno = Math.max(1, currentLastRow - 2);
 
-    const grandHeaders = [
-      'SNO',
-      'Date',
-      'Name of the Faculty',
-      'Section',
-      'Course Name',
-      'Credits',
-      'Class Hour / Slot',
-      'Unit No',
-      'Topic Name / Duty Details',
-    ];
-
-    // Find if a section for payload.date already exists in Grand Daily Report
-    let grandDateBannerIdx = -1; // 0-based
-    let grandDateEndIdx = -1;    // 0-based
-
-    for (let r = 0; r < existingGrandRows.length; r++) {
-      const cellA = (existingGrandRows[r]?.[0] || '').toString();
-      if (cellA.includes('GRAND DAILY REPORT') && cellA.includes(payload.date)) {
-        grandDateBannerIdx = r;
-        for (let k = r + 1; k < existingGrandRows.length; k++) {
-          const nextCellA = (existingGrandRows[k]?.[0] || '').toString();
-          if (nextCellA.includes('End of Grand Daily Register')) {
-            grandDateEndIdx = k + 1;
-            break;
-          }
-          if (nextCellA.includes('GRAND DAILY REPORT')) {
-            grandDateEndIdx = k - 1;
-            break;
-          }
-        }
-        if (grandDateEndIdx === -1) grandDateEndIdx = existingGrandRows.length - 1;
-        break;
-      }
-    }
-
-    // Extract all rows for this date, preserving other faculty members' entries
-    const otherFacultyRows: (string | number)[][] = [];
-
-    if (grandDateBannerIdx !== -1) {
-      for (let r = grandDateBannerIdx + 2; r <= grandDateEndIdx; r++) {
-        const row = existingGrandRows[r];
-        if (!row || row.length === 0) continue;
-        const cellA = (row[0] || '').toString();
-        const facultyInRow = (row[2] || '').toString().trim();
-        // Skip headers, dividers, borders
-        if (cellA.includes('SNO') || cellA.includes('════') || cellA.includes('──────') || !facultyInRow) {
-          continue;
-        }
-        // If it belongs to a different faculty, KEEP IT 100%!
-        if (facultyInRow.toLowerCase() !== payload.facultyName.toLowerCase()) {
-          otherFacultyRows.push(row);
-        }
-      }
-    }
-
-    // Build this faculty's rows
-    const thisFacultyRows: (string | number)[][] = payload.logs.map((item) => [
-      0, // SNO will be assigned sequentially
+    const masterRowsToAppend: (string | number)[][] = payload.logs.map((item, idx) => [
+      startSno + idx,
+      timestampStr,
       payload.date,
       payload.facultyName,
-      item.section || 'III A',
-      item.courseName || 'Course',
-      item.credits || '3',
-      item.slot,
-      item.unitNo || '1',
-      item.topicName || item.activity || '',
+      (item.section || '').trim(),
+      (item.courseName || '').trim(),
+      (item.credits || '3').toString().trim(),
+      (item.slot || `P${idx + 1}`).trim(),
+      (item.unitNo || '').toString().trim(),
+      (item.topicName || item.activity || '').trim(),
     ]);
-
-    // Combine all faculty rows for this date and re-index SNO sequentially 1..N
-    const allDateRows = [...otherFacultyRows, ...thisFacultyRows];
-    allDateRows.forEach((row, i) => {
-      row[0] = i + 1;
-    });
-
-    const grandDayTable: (string | number)[][] = [
-      [grandBorder, '', '', '', '', '', '', '', ''],
-      [grandBanner, '', '', '', '', '', '', '', ''],
-      [grandBorder, '', '', '', '', '', '', '', ''],
-      grandHeaders,
-      ...allDateRows,
-      [grandDivider, '', '', '', '', '', '', '', ''],
-      ['', '', '', '', '', '', '', '', ''],
-    ];
-
-    let fullGrandRows: (string | number)[][] = [];
-
-    if (grandDateBannerIdx === -1) {
-      // Brand new date table appended to Grand Daily Report
-      fullGrandRows = [...existingGrandRows];
-      if (fullGrandRows.length > 0) {
-        fullGrandRows.push(['', '', '', '', '', '', '', '', '']);
-      }
-      fullGrandRows.push(...grandDayTable);
-    } else {
-      // Replace existing date block in-place, preserving other days before and after
-      const topSection = existingGrandRows.slice(0, Math.max(0, grandDateBannerIdx - 1));
-      const bottomSection = existingGrandRows.slice(grandDateEndIdx + 1);
-      fullGrandRows = [...topSection, ...grandDayTable, ...bottomSection];
-    }
-
-    const grandWriteUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${formatA1Range(
+    const grandAppendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${formatA1Range(
       grandTabName,
-      `A1:I${fullGrandRows.length}`
-    )}?valueInputOption=USER_ENTERED`;
+      'A:J'
+    )}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
 
-    const grandPutRes = await fetchSheetsWithRetry(grandWriteUrl, {
-      method: 'PUT',
+    await fetchSheetsWithRetry(grandAppendUrl, {
+      method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        range: `'${grandTabName}'!A1:I${fullGrandRows.length}`,
-        majorDimension: 'ROWS',
-        values: fullGrandRows,
+        values: masterRowsToAppend,
       }),
     });
-
-    // If tab doesn't exist yet, create and write
-    if (!grandPutRes.ok && (grandPutRes.status === 400 || grandPutRes.status === 404)) {
-      await fetchSheetsWithRetry(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            requests: [
-              {
-                addSheet: {
-                  properties: {
-                    title: grandTabName,
-                    index: 0,
-                  },
-                },
-              },
-            ],
-          }),
-        }
-      );
-
-      await fetchSheetsWithRetry(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${formatA1Range(
-          grandTabName,
-          `A1:I${fullGrandRows.length}`
-        )}?valueInputOption=USER_ENTERED`,
-        {
-          method: 'PUT',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            range: `'${grandTabName}'!A1:I${fullGrandRows.length}`,
-            majorDimension: 'ROWS',
-            values: fullGrandRows,
-          }),
-        }
-      );
-    }
   } catch (grandErr) {
-    console.warn('Non-blocking note on Grand Daily Report sync:', grandErr);
+    console.warn('[GoogleSheets] Master Daily Report append note:', grandErr);
   }
 
   return {
     success: true,
-    message: `Successfully synchronized ${payload.logs.length} activities to "${cleanTabName}" (${updatedRange}) & ${grandTabName}!`,
+    message: `Successfully appended ${payload.logs.length} activities for ${payload.facultyName} on tab "${cleanTabName}" and Master_Daily_Report (Append-Only)!`,
     tabName: cleanTabName,
     rowsAdded: payload.logs.length,
     spreadsheetUrl: tabInfo.tabUrl,
-    updatedRange,
   };
 }
+
