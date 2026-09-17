@@ -732,10 +732,19 @@ function sanitizeTabTitle(name) {
 }
 
 /**
- * Finds an existing sheet using normalized, case-insensitive matching.
+ * Finds an existing sheet using ss.getSheetByName() and normalized, case-insensitive matching.
  * If not found, creates the sheet and formats headers atomically.
  */
 function getOrCreateFacultySheet(ss, facultyName) {
+  var displayTitle = sanitizeTabTitle(facultyName);
+
+  // 1. Direct fast lookup using ss.getSheetByName()
+  var directMatch = ss.getSheetByName(displayTitle);
+  if (directMatch) {
+    return { sheet: directMatch, isNew: false };
+  }
+
+  // 2. Case-insensitive and whitespace-normalized check across all existing sheets
   var targetKey = normalizeTabKey(facultyName);
   var sheets = ss.getSheets();
 
@@ -747,14 +756,16 @@ function getOrCreateFacultySheet(ss, facultyName) {
   }
 
   // Tab does not exist yet -> Create with standardized title
-  var displayTitle = sanitizeTabTitle(facultyName);
-
   try {
     var newSheet = ss.insertSheet(displayTitle);
     formatFacultySheetHeaders(newSheet);
     return { sheet: newSheet, isNew: true };
   } catch (e) {
-    // Edge case fallback: if another thread or transient naming collision occurred, scan once more
+    // Edge case fallback: if another thread or transient naming collision occurred, re-verify with getSheetByName
+    var fallback = ss.getSheetByName(displayTitle);
+    if (fallback) {
+      return { sheet: fallback, isNew: false };
+    }
     var retrySheets = ss.getSheets();
     for (var j = 0; j < retrySheets.length; j++) {
       if (normalizeTabKey(retrySheets[j].getName()) === targetKey) {
@@ -839,6 +850,13 @@ function getExistingFacultySlotKeys(sheet, targetDate) {
  * Gets or creates the official institutional Master_Daily_Report tab
  */
 function getOrCreateGrandReportSheet(ss) {
+  // 1. Direct fast lookup with ss.getSheetByName()
+  var directMaster = ss.getSheetByName("Master_Daily_Report") || ss.getSheetByName("Grand_Daily_Report");
+  if (directMaster) {
+    return directMaster;
+  }
+
+  // 2. Case-insensitive and normalized check across all existing sheets
   var targetKeys = ["masterdailyreport", "granddailyreport"];
   var sheets = ss.getSheets();
   for (var i = 0; i < sheets.length; i++) {
