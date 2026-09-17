@@ -54,6 +54,7 @@ interface HodDashboardViewProps {
   onOpenGoogleSheetsSettings?: () => void;
   onSyncLogToSheets?: (log: ActivityLog) => void;
   isGoogleSheetsConfigured?: boolean;
+  googleSheetsUrl?: string;
   adminEmail?: string | null;
   onLogoutHod?: () => void;
 }
@@ -67,6 +68,7 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
   onOpenGoogleSheetsSettings,
   onSyncLogToSheets,
   isGoogleSheetsConfigured = false,
+  googleSheetsUrl = '',
   adminEmail,
   onLogoutHod,
 }) => {
@@ -438,6 +440,38 @@ export const HodDashboardView: React.FC<HodDashboardViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Prompt HoD if Google Apps Script Web App URL is missing */}
+      {(!isGoogleSheetsConfigured || !googleSheetsUrl?.trim()) && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5 sm:p-4 text-amber-900 shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-xl bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-700 shrink-0 mt-0.5">
+              <AlertCircle className="w-4 h-4 text-amber-600" />
+            </div>
+            <div>
+              <h4 className="text-xs font-bold text-amber-950 flex items-center gap-1.5 flex-wrap">
+                <span>Google Apps Script Web App URL Pending Configuration</span>
+                <span className="text-[10px] bg-amber-200 text-amber-900 px-1.5 py-0.2 rounded font-semibold uppercase tracking-wider">
+                  Action Needed
+                </span>
+              </h4>
+              <p className="text-[11px] text-amber-800/95 mt-0.5 leading-relaxed">
+                Faculty public submissions are saved safely to departmental cloud records. To automatically sync submissions directly to your Google Sheets tabs, set <code className="bg-amber-100 text-amber-950 px-1.5 py-0.5 rounded font-mono text-[10px] font-bold border border-amber-300">VITE_GOOGLE_SHEETS_WEB_APP_URL</code> in Vercel or configure it below.
+              </p>
+            </div>
+          </div>
+          {onOpenGoogleSheetsSettings && (
+            <button
+              type="button"
+              onClick={onOpenGoogleSheetsSettings}
+              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer inline-flex items-center gap-1.5 shrink-0 self-stretch sm:self-auto justify-center"
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span>Configure Sheets Sync</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Filter Bar */}
       <div className="bg-white rounded-2xl border border-slate-200 p-3.5 space-y-2.5 shadow-2xs">

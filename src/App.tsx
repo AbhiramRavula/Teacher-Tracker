@@ -79,6 +79,7 @@ import {
   Lock,
   Download,
   X,
+  ArrowLeft,
 } from 'lucide-react';
 
 export default function App() {
@@ -233,9 +234,13 @@ export default function App() {
   }, [toastMessage]);
 
   // Handle faculty selection from modal
-  const handleSelectFaculty = (name: string, title?: string) => {
+  const handleSelectFaculty = (name: string, title?: string, roleOverride?: Role) => {
+    const effectiveRole = roleOverride || role;
+    if (roleOverride && roleOverride !== role) {
+      setRole(roleOverride);
+    }
     setEmployeeName(name);
-    if (role === 'Programmer') {
+    if (effectiveRole === 'Programmer') {
       setDepartment('Department of Information Technology (Systems & Labs)');
     } else {
       setDepartment('Department of Information Technology');
@@ -243,22 +248,32 @@ export default function App() {
     setFormError('');
 
     // Strictly separate logs by selected date and faculty:
-    // Check if there are draft activities already saved for this faculty on this date
+    // Check if there are draft activities or previously saved logs for this faculty on this date
     const existingDrafts = loadDraftsForEmployeeAndDate(name, date);
     const existingStructDrafts = loadStructuredDraftsForEmployeeAndDate(name, date);
-    setPeriodData(existingStructDrafts);
 
-    if (Object.keys(existingDrafts).length > 0 || Object.keys(existingStructDrafts).length > 0) {
-      setActivities(existingDrafts);
+    // Look for any existing saved/submitted log in memory/Firestore for this faculty and date
+    const existingSavedLog = logs.find(
+      (l) =>
+        l.employeeName.trim().toLowerCase() === name.trim().toLowerCase() &&
+        l.date === date
+    );
+
+    const mergedActs = { ...(existingSavedLog?.activities || {}), ...existingDrafts };
+    const mergedStruct = { ...(existingSavedLog?.periodData || {}), ...existingStructDrafts };
+
+    if (Object.keys(mergedActs).length > 0 || Object.keys(mergedStruct).length > 0) {
+      setActivities(mergedActs);
+      setPeriodData(mergedStruct);
       setToastMessage({
-        text: `Restored saved draft activities for ${name} on ${date}.`,
+        text: `Restored saved activities for ${name} on ${date}.`,
         type: 'info',
       });
       return;
     }
 
     // If no draft saved yet for this date, auto-populate scheduled periods from the master timetable
-    if (role === 'Faculty') {
+    if (effectiveRole === 'Faculty') {
       const daySlots = getFacultyDaySlotsDetailed(name, selectedDay);
       const newActs: Record<string, string> = {};
       const newStruct: Record<string, PeriodSlotData> = {};
@@ -312,8 +327,17 @@ export default function App() {
         setPeriodData({});
       }
     } else {
-      setActivities({});
+      // Programmer role
+      const programmerClosingText =
+        'Lab systems health check completed, servers verified, and workstations secured (Duty schedule: 05:30 PM).';
+      const progActs: Record<string, string> = { slot_closing: programmerClosingText };
+      saveSlotDraft(name, date, 'slot_closing', programmerClosingText);
+      setActivities(progActs);
       setPeriodData({});
+      setToastMessage({
+        text: `Selected programmer ${name} (closing slot dynamically extended to 05:30 PM).`,
+        type: 'info',
+      });
     }
   };
 
@@ -333,13 +357,24 @@ export default function App() {
     }
 
     // Separate logs strictly by selected date (YYYY-MM-DD)
-    // Changing date loads ONLY drafts specifically saved for that date
+    // Changing date loads drafts specifically saved for that date, or previously submitted logs
     const dateDrafts = loadDraftsForEmployeeAndDate(employeeName, newDate);
     const dateStructDrafts = loadStructuredDraftsForEmployeeAndDate(employeeName, newDate);
-    setActivities(dateDrafts);
-    setPeriodData(dateStructDrafts);
 
-    if (Object.keys(dateDrafts).length > 0 || Object.keys(dateStructDrafts).length > 0) {
+    // Look for any existing saved/submitted log in memory/Firestore for this faculty and date
+    const existingSavedLog = logs.find(
+      (l) =>
+        l.employeeName.trim().toLowerCase() === employeeName.trim().toLowerCase() &&
+        l.date === newDate
+    );
+
+    const mergedActs = { ...(existingSavedLog?.activities || {}), ...dateDrafts };
+    const mergedStruct = { ...(existingSavedLog?.periodData || {}), ...dateStructDrafts };
+
+    setActivities(mergedActs);
+    setPeriodData(mergedStruct);
+
+    if (Object.keys(mergedActs).length > 0 || Object.keys(mergedStruct).length > 0) {
       setToastMessage({
         text: `Loaded saved activities for ${newDate}.`,
         type: 'info',
@@ -641,7 +676,7 @@ export default function App() {
     // Dispatches log via Public Google Apps Script Web App (zero auth) or Direct API
     setIsSubmittingToSheets(true);
     setToastMessage({
-      text: `Syncing ${filledSlotsCount} hourly activities to Google Sheet tab "${employeeName.trim()}"...`,
+      text: `Syncing ${filledSlotsCount} duties for ${employeeName.trim()} to personal tab & Grand Daily Report (new daily table)...`,
       type: 'info',
     });
 
@@ -661,7 +696,7 @@ export default function App() {
 
       if (result.success) {
         setToastMessage({
-          text: `Activity log submitted! Successfully logged ${filledSlotsCount} activities for ${employeeName.trim()} to sheet tab "${result.tabName || employeeName.trim()}" & Master Daily Report!`,
+          text: `Daily log saved & synced! Recorded ${filledSlotsCount} activities for ${employeeName.trim()} in personal tab "${result.tabName || employeeName.trim()}" & Grand Daily Report (New table for ${date})!`,
           type: 'success',
           link: result.spreadsheetUrl,
           linkText: 'Open in Sheets',
@@ -838,30 +873,32 @@ export default function App() {
                 <span className="hidden sm:inline">Excel (.xlsx)</span>
               </button>
 
-              {/* Google Sheets Sync status & configuration trigger */}
-              <button
-                type="button"
-                onClick={handleOpenSheetsConfig}
-                className={`px-2.5 py-1 text-[11px] font-semibold border rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1.5 ${
-                  isGoogleSheetsConfigured
-                    ? 'text-emerald-300 hover:text-white bg-slate-800 hover:bg-slate-700 border-emerald-500/40'
-                    : 'text-amber-300 hover:text-white bg-slate-800 hover:bg-slate-700 border-amber-500/40'
-                }`}
-                title={
-                  isGoogleSheetsConfigured
-                    ? `Google Sheets Live Sync Connected: ${spreadsheetTitle || 'Active'}`
-                    : 'Connect Google Sheet to enable automatic faculty tab registration'
-                }
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span className="hidden sm:inline">Sheets Sync</span>
-                <span className="sm:hidden">Sheets</span>
-                {isGoogleSheetsConfigured ? (
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                ) : (
-                  <span className="w-2 h-2 rounded-full bg-amber-400"></span>
-                )}
-              </button>
+              {/* Google Sheets Sync status & configuration trigger (Only visible to authenticated HoD / Admin) */}
+              {hodAdminEmail && (
+                <button
+                  type="button"
+                  onClick={handleOpenSheetsConfig}
+                  className={`px-2.5 py-1 text-[11px] font-semibold border rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1.5 ${
+                    isGoogleSheetsConfigured
+                      ? 'text-emerald-300 hover:text-white bg-slate-800 hover:bg-slate-700 border-emerald-500/40'
+                      : 'text-amber-300 hover:text-white bg-slate-800 hover:bg-slate-700 border-amber-500/40'
+                  }`}
+                  title={
+                    isGoogleSheetsConfigured
+                      ? `Google Sheets Live Sync Connected: ${spreadsheetTitle || 'Active'}`
+                      : 'Connect Google Sheet to enable automatic faculty tab registration'
+                  }
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span className="hidden sm:inline">Sheets Sync</span>
+                  <span className="sm:hidden">Sheets</span>
+                  {isGoogleSheetsConfigured ? (
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  ) : (
+                    <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                  )}
+                </button>
+              )}
 
               {/* Admin status / Login badge */}
               {hodAdminEmail ? (
@@ -1001,14 +1038,16 @@ export default function App() {
                         <ExternalLink className="w-3 h-3" />
                       </a>
                     )}
-                    <button
-                      type="button"
-                      onClick={handleOpenSheetsConfig}
-                      className="px-2.5 py-1.5 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl font-semibold text-[11px] transition-colors cursor-pointer shrink-0 shadow-2xs"
-                      title="Configure Google Sheets sync parameters (Requires Admin authentication)"
-                    >
-                      Tab &amp; Sync Settings
-                    </button>
+                    {hodAdminEmail && (
+                      <button
+                        type="button"
+                        onClick={handleOpenSheetsConfig}
+                        className="px-2.5 py-1.5 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl font-semibold text-[11px] transition-colors cursor-pointer shrink-0 shadow-2xs"
+                        title="Configure Google Sheets sync parameters (Requires Admin authentication)"
+                      >
+                        Tab &amp; Sync Settings
+                      </button>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -1022,19 +1061,25 @@ export default function App() {
                         Google Sheets Sync: Pending Admin Setup
                       </span>
                       <span className="text-[11px] text-slate-600 truncate block">
-                        All duty entries are securely saved to department cloud records. Admin can link live Google Sheet below.
+                        All duty entries are securely saved to department cloud records.
                       </span>
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={handleOpenSheetsConfig}
-                    className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-xl font-bold text-[11px] transition-colors cursor-pointer shrink-0 inline-flex items-center gap-1 shadow-2xs"
-                    title="Connect Google Sheet (Requires Admin authentication)"
-                  >
-                    <span>Connect Sheet</span>
-                  </button>
+                  {hodAdminEmail ? (
+                    <button
+                      type="button"
+                      onClick={handleOpenSheetsConfig}
+                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-xl font-bold text-[11px] transition-colors cursor-pointer shrink-0 inline-flex items-center gap-1 shadow-2xs"
+                      title="Connect Google Sheet (Requires Admin authentication)"
+                    >
+                      <span>Connect Sheet</span>
+                    </button>
+                  ) : (
+                    <span className="px-2.5 py-1 bg-amber-100 text-amber-900 border border-amber-300/80 rounded-lg text-[10px] font-semibold">
+                      Auto-Logged
+                    </span>
+                  )}
                 </div>
               )}
 
@@ -1233,39 +1278,40 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-8 rounded-xl bg-white/15 flex items-center justify-center">
-                      <Send className="w-4 h-4 text-white" />
+                      <Save className="w-4 h-4 text-white" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-bold leading-tight">Ready to Submit?</h3>
+                      <h3 className="text-sm font-bold leading-tight">Save &amp; Sync Daily Log</h3>
                       <p className="text-[11px] text-emerald-100">
                         {filledSlotsCount}/7 slots completed for {date}
                       </p>
                     </div>
                   </div>
-                  <span className="text-[11px] bg-white/20 px-2 py-0.5 rounded-full font-semibold">
-                    Real-Time Saved
+                  <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-semibold">
+                    2 Sheets Sync Active
                   </span>
                 </div>
 
                 <p className="text-[11px] text-emerald-50 leading-relaxed">
-                  Inputs are continuously saved to this device. Submitting will package all filled slots and push the record to your Google Sheet and the HoD review queue.
+                  Clicking <strong>Save Log</strong> immediately syncs your entries to Google Sheets with two dedicated records: your <strong>Faculty Personal Tab</strong> and the <strong>Grand Daily Report</strong> sheet (creating a dedicated new table for every single day).
                 </p>
 
                 <button
                   type="button"
+                  id="primary-save-log-btn"
                   disabled={isSubmittingToSheets}
-                  onClick={handleSubmitTodaysLog}
+                  onClick={handleSaveLog}
                   className="w-full py-3 bg-white hover:bg-emerald-50 text-emerald-950 font-extrabold text-xs rounded-xl transition-all shadow-md active:scale-98 cursor-pointer flex items-center justify-center gap-2 disabled:opacity-70"
                 >
                   {isSubmittingToSheets ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin text-emerald-700" />
-                      <span>Transmitting Log to Sheet...</span>
+                      <span>Syncing Both Sheets Immediately...</span>
                     </>
                   ) : (
                     <>
                       <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
-                      <span>Submit Today&apos;s Complete Log</span>
+                      <span>Save Log &amp; Sync to Sheets Immediately</span>
                     </>
                   )}
                 </button>
@@ -1328,7 +1374,18 @@ export default function App() {
           {activeTab === 'hod' && (
             !hodAdminEmail ? (
               /* HoD Protected Access Gate */
-              <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-sm text-center space-y-4 my-6 max-w-md mx-auto">
+              <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-sm text-center space-y-4 my-6 max-w-md mx-auto relative">
+                {/* Top-Right Close Button for immediate exit if opened by mistake */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('tracker')}
+                  className="absolute top-3.5 right-3.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-all cursor-pointer border border-transparent hover:border-slate-200 shadow-2xs"
+                  title="Close and return to Faculty Tracker"
+                  aria-label="Close and return to Faculty Tracker"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+
                 <div className="w-14 h-14 mx-auto rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 shadow-xs">
                   <FileCheck2 className="w-7 h-7" />
                 </div>
@@ -1383,9 +1440,10 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setActiveTab('tracker')}
-                    className="w-full min-h-[44px] px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-xl transition-colors cursor-pointer"
+                    className="w-full min-h-[48px] px-4 bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-700 font-bold text-xs sm:text-sm rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2 border border-slate-200 shadow-2xs"
                   >
-                    Back to Faculty Portal
+                    <ArrowLeft className="w-4 h-4 text-slate-500" />
+                    <span>Close &amp; Return to Faculty Tracker</span>
                   </button>
                 </div>
               </div>
@@ -1402,6 +1460,7 @@ export default function App() {
                 onOpenGoogleSheetsSettings={() => setIsSheetsModalOpen(true)}
                 onSyncLogToSheets={handleSyncLogToSheets}
                 isGoogleSheetsConfigured={Boolean(googleSheetsUrl.trim())}
+                googleSheetsUrl={googleSheetsUrl}
               />
             )
           )}
@@ -1448,23 +1507,23 @@ export default function App() {
                 <span className="hidden sm:inline">PDF</span>
               </button>
 
-              {/* Main Thumb Action: Submit Today's Log */}
+              {/* Main Thumb Action: Save Log & Sync */}
               <button
                 id="submit-todays-log-button"
                 type="button"
                 disabled={isSubmittingToSheets}
-                onClick={handleSubmitTodaysLog}
+                onClick={handleSaveLog}
                 className="min-h-[48px] flex-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-98 disabled:opacity-75 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all shadow-md cursor-pointer px-3"
               >
                 {isSubmittingToSheets ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-                    <span className="truncate">Submitting...</span>
+                    <span className="truncate">Syncing to Sheets...</span>
                   </>
                 ) : (
                   <>
-                    <Send className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">Submit Today&apos;s Log ({filledSlotsCount}/{BASE_TIME_SLOTS.length})</span>
+                    <Save className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">Save Log &amp; Sync ({filledSlotsCount}/{BASE_TIME_SLOTS.length} Slots)</span>
                   </>
                 )}
               </button>
@@ -1561,7 +1620,13 @@ export default function App() {
         {/* HoD Admin Authentication Gate Modal */}
         <HodAuthModal
           isOpen={isHodAuthModalOpen}
-          onClose={() => setIsHodAuthModalOpen(false)}
+          onClose={() => {
+            setIsHodAuthModalOpen(false);
+            setPendingAdminAction(null);
+            if (activeTab === 'hod' && !hodAdminEmail) {
+              setActiveTab('tracker');
+            }
+          }}
           onSuccessLogin={handleHodLoginSuccess}
         />
 

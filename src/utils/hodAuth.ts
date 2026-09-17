@@ -29,6 +29,10 @@ export function getAdditionalAdminEmail(): string {
     if (stored !== null && stored.trim()) {
       return stored.trim();
     }
+    const fromEnv = (import.meta.env.VITE_AHOD_EMAIL || '') as string;
+    if (fromEnv && fromEnv.trim()) {
+      return fromEnv.trim();
+    }
     return DEFAULT_AHOD_EMAIL;
   } catch {
     return DEFAULT_AHOD_EMAIL;

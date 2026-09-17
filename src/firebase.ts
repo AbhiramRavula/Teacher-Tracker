@@ -5,7 +5,7 @@
  * and persistent departmental settings in Firestore.
  */
 
-import { initializeApp, getApps, getApp } from 'firebase/app';
+import { initializeApp, getApps, getApp, FirebaseOptions } from 'firebase/app';
 import {
   getAuth,
   GoogleAuthProvider,
@@ -15,17 +15,38 @@ import {
   onAuthStateChanged,
 } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
-import firebaseConfig from '../firebase-applet-config.json';
+import fallbackFirebaseConfig from '../firebase-applet-config.json';
 import { setCachedAccessToken } from './utils/firebaseAuth';
 
+// Priority 1: Vercel / Vite environment variables (prefixed with VITE_FIREBASE_*)
+// Priority 2: Injected fallback firebase-applet-config.json for preview & dev container
+export const resolvedFirebaseConfig: Record<string, string> = {
+  apiKey: (import.meta.env.VITE_FIREBASE_API_KEY || fallbackFirebaseConfig.apiKey || '').trim(),
+  authDomain: (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || fallbackFirebaseConfig.authDomain || '').trim(),
+  projectId: (import.meta.env.VITE_FIREBASE_PROJECT_ID || fallbackFirebaseConfig.projectId || '').trim(),
+  storageBucket: (import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || fallbackFirebaseConfig.storageBucket || '').trim(),
+  messagingSenderId: (import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || fallbackFirebaseConfig.messagingSenderId || '').trim(),
+  appId: (import.meta.env.VITE_FIREBASE_APP_ID || fallbackFirebaseConfig.appId || '').trim(),
+  measurementId: (import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || fallbackFirebaseConfig.measurementId || '').trim(),
+  firestoreDatabaseId: (
+    import.meta.env.VITE_FIREBASE_DATABASE_ID ||
+    import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID ||
+    fallbackFirebaseConfig.firestoreDatabaseId ||
+    ''
+  ).trim(),
+  oAuthClientId: (import.meta.env.VITE_FIREBASE_OAUTH_CLIENT_ID || fallbackFirebaseConfig.oAuthClientId || '').trim(),
+};
+
 // Initialize Firebase App instance safely
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+export const app = getApps().length > 0 ? getApp() : initializeApp(resolvedFirebaseConfig as FirebaseOptions);
 
 // Initialize Firebase Authentication
 export const auth = getAuth(app);
 
-// Initialize Firebase Firestore with designated database ID
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+// Initialize Firebase Firestore with designated database ID if provided
+export const db = resolvedFirebaseConfig.firestoreDatabaseId
+  ? getFirestore(app, resolvedFirebaseConfig.firestoreDatabaseId)
+  : getFirestore(app);
 
 export const googleProvider = new GoogleAuthProvider();
 // Request Google Workspace Sheets & Drive scopes for direct live sync

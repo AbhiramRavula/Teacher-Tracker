@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ShieldAlert,
   ShieldCheck,
@@ -35,6 +35,18 @@ export const HodAuthModal: React.FC<HodAuthModalProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isGoogleLoading, setIsGoogleLoading] = useState<boolean>(false);
 
+  // Allow closing via Escape key
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const handleGoogleSignIn = async () => {
@@ -64,17 +76,25 @@ export const HodAuthModal: React.FC<HodAuthModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-150">
-      <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden flex flex-col">
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-150"
+    >
+      <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden flex flex-col relative animate-in zoom-in-95 duration-150">
         {/* Header with Matrusri Departmental Branding */}
-        <div className="bg-slate-900 text-white p-4 sm:p-5 relative">
+        <div className="bg-slate-900 text-white p-4 sm:p-5 relative pr-14">
           <button
             type="button"
             onClick={onClose}
-            className="absolute top-3.5 right-3.5 p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+            className="absolute top-3 right-3 min-w-[44px] min-h-[44px] flex items-center justify-center text-slate-300 hover:text-white rounded-xl bg-slate-800/80 hover:bg-slate-700 border border-slate-700 transition-all cursor-pointer shadow-xs"
             title="Close and return to Faculty Tracker"
+            aria-label="Close authentication dialog"
           >
-            <X className="w-4 h-4" />
+            <X className="w-5 h-5" />
           </button>
 
           <div className="flex items-center gap-3">
@@ -230,6 +250,17 @@ export const HodAuthModal: React.FC<HodAuthModalProps> = ({
                 </>
               )}
             </button>
+
+            {/* In-body Cancel / Close button for immediate dismissal if opened by mistake */}
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-full min-h-[46px] rounded-xl bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-700 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer border border-slate-200 mt-2.5 shadow-2xs"
+            >
+              <ArrowLeft className="w-4 h-4 text-slate-500" />
+              <span>Cancel &amp; Return to Faculty Tracker</span>
+            </button>
+
             <p className="text-[11px] text-center text-slate-500 mt-2">
               Sign in using the Google account authorized for your HoD, Dev, or AHoD role.
             </p>

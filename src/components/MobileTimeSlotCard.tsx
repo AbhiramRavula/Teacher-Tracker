@@ -220,7 +220,7 @@ export const MobileTimeSlotCard: React.FC<MobileTimeSlotCardProps> = ({
                 value={currentCourse}
                 onChange={(e) => handleFieldUpdate('courseName', e.target.value)}
                 placeholder="e.g. DS, OS, AI, WT, SE"
-                className="w-full min-h-[44px] px-3 py-2 text-xs font-bold text-slate-900 bg-white rounded-xl border border-slate-300 focus:border-blue-600 focus:ring-2 focus:ring-blue-100 focus:outline-none transition-all placeholder:text-slate-400 placeholder:font-normal shadow-2xs"
+                className="w-full min-h-[48px] px-3 py-2 text-xs font-bold text-slate-900 bg-white rounded-xl border border-slate-300 focus:border-blue-600 focus:ring-2 focus:ring-blue-100 focus:outline-none transition-all placeholder:text-slate-400 placeholder:font-normal shadow-2xs"
               />
             </div>
 
@@ -239,7 +239,7 @@ export const MobileTimeSlotCard: React.FC<MobileTimeSlotCardProps> = ({
                 value={currentSection}
                 onChange={(e) => handleFieldUpdate('section', e.target.value)}
                 placeholder="e.g. III A"
-                className="w-full min-h-[44px] px-2.5 py-2 text-xs font-bold text-slate-900 bg-white rounded-xl border border-slate-300 focus:border-blue-600 focus:ring-2 focus:ring-blue-100 focus:outline-none transition-all placeholder:text-slate-400 placeholder:font-normal shadow-2xs"
+                className="w-full min-h-[48px] px-2.5 py-2 text-xs font-bold text-slate-900 bg-white rounded-xl border border-slate-300 focus:border-blue-600 focus:ring-2 focus:ring-blue-100 focus:outline-none transition-all placeholder:text-slate-400 placeholder:font-normal shadow-2xs"
               />
             </div>
 
@@ -258,7 +258,7 @@ export const MobileTimeSlotCard: React.FC<MobileTimeSlotCardProps> = ({
                 value={currentCredits}
                 onChange={(e) => handleFieldUpdate('credits', e.target.value)}
                 placeholder="e.g. 3"
-                className="w-full min-h-[44px] px-2.5 py-2 text-xs font-bold text-slate-900 bg-white rounded-xl border border-slate-300 focus:border-blue-600 focus:ring-2 focus:ring-blue-100 focus:outline-none transition-all placeholder:text-slate-400 placeholder:font-normal shadow-2xs"
+                className="w-full min-h-[48px] px-2.5 py-2 text-xs font-bold text-slate-900 bg-white rounded-xl border border-slate-300 focus:border-blue-600 focus:ring-2 focus:ring-blue-100 focus:outline-none transition-all placeholder:text-slate-400 placeholder:font-normal shadow-2xs"
               />
             </div>
 
@@ -277,7 +277,7 @@ export const MobileTimeSlotCard: React.FC<MobileTimeSlotCardProps> = ({
                 value={currentUnit}
                 onChange={(e) => handleFieldUpdate('unitNo', e.target.value)}
                 placeholder="Unit (e.g. 2)"
-                className="w-full min-h-[44px] px-2.5 py-2 text-xs font-extrabold text-blue-950 bg-blue-50/40 rounded-xl border border-blue-200 focus:border-blue-600 focus:bg-white focus:ring-2 focus:ring-blue-100 focus:outline-none transition-all placeholder:text-slate-400 placeholder:font-normal shadow-2xs text-center"
+                className="w-full min-h-[48px] px-2.5 py-2 text-xs font-extrabold text-blue-950 bg-blue-50/40 rounded-xl border border-blue-200 focus:border-blue-600 focus:bg-white focus:ring-2 focus:ring-blue-100 focus:outline-none transition-all placeholder:text-slate-400 placeholder:font-normal shadow-2xs text-center"
               />
             </div>
           </div>

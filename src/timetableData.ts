@@ -782,6 +782,74 @@ export const TRANSFERRED_FACULTY_NAMES = [
   'Mrs. B. Deepa',
 ] as const;
 
+export interface ProgrammerMember {
+  id: string;
+  name: string;
+  displayName: string;
+  normalizedName: string;
+  title: string;
+  department: string;
+  primarySubjects: string[];
+  primaryDuties: string[];
+}
+
+/**
+ * Official active Programmers roster for the Department of Information Technology.
+ * Duty schedule dynamically closes at 05:30 PM.
+ */
+export const PROGRAMMER_DIRECTORY: ProgrammerMember[] = [
+  {
+    id: 'prog_srinivas',
+    name: 'Srinivas',
+    displayName: 'Srinivas (Programmer)',
+    normalizedName: 'SRINIVAS',
+    title: 'Programmer / Computing Facilities In-Charge',
+    department: 'Department of Information Technology (Systems & Labs)',
+    primarySubjects: ['Linux Systems Lab', 'Server Administration', 'GCC/Python Toolchains'],
+    primaryDuties: ['Linux Systems Lab', 'Server Administration', 'GCC/Python Toolchains'],
+  },
+  {
+    id: 'prog_ramesh_kumar',
+    name: 'Ramesh Kumar',
+    displayName: 'Ramesh Kumar (Programmer)',
+    normalizedName: 'RAMESH KUMAR',
+    title: 'Programmer / Systems Administrator',
+    department: 'Department of Information Technology (Systems & Labs)',
+    primarySubjects: ['Networking & Lab Servers', 'Data Structures Lab Support', 'Hardware Audits'],
+    primaryDuties: ['Networking & Lab Servers', 'Data Structures Lab Support', 'Hardware Audits'],
+  },
+  {
+    id: 'prog_girija',
+    name: 'Girija',
+    displayName: 'Girija (Programmer)',
+    normalizedName: 'GIRIJA',
+    title: 'Programmer / Computing Labs',
+    department: 'Department of Information Technology (Systems & Labs)',
+    primarySubjects: ['Web Tech & Database Lab', 'Student Systems Setup', 'Software Licenses'],
+    primaryDuties: ['Web Tech & Database Lab', 'Student Systems Setup', 'Software Licenses'],
+  },
+  {
+    id: 'prog_krishna_mohan',
+    name: 'Krishna Mohan',
+    displayName: 'Krishna Mohan (Programmer)',
+    normalizedName: 'KRISHNA MOHAN',
+    title: 'Programmer / Network & Hardware',
+    department: 'Department of Information Technology (Systems & Labs)',
+    primarySubjects: ['IoT & Embedded Systems Lab', 'LAN Routing & Switches', 'Smart Board Maintenance'],
+    primaryDuties: ['IoT & Embedded Systems Lab', 'LAN Routing & Switches', 'Smart Board Maintenance'],
+  },
+  {
+    id: 'prog_mounika',
+    name: 'Mounika',
+    displayName: 'Mounika (Programmer)',
+    normalizedName: 'MOUNIKA',
+    title: 'Programmer / Lab Systems',
+    department: 'Department of Information Technology (Systems & Labs)',
+    primarySubjects: ['AI & Machine Learning Lab', 'Workstation Health Checks', 'Antivirus & Backups'],
+    primaryDuties: ['AI & Machine Learning Lab', 'Workstation Health Checks', 'Antivirus & Backups'],
+  },
+];
+
 /**
  * Checks if a faculty member has transferred out of the department (effective Sep 15, 2026)
  */

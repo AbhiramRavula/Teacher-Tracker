@@ -34,6 +34,7 @@ import {
   testAppsScriptEndpoint,
   ensureFacultyTabExists,
   initializeAllFacultyTabsInSheet,
+  isSheetsUrlConfiguredInEnv,
 } from '../utils/googleSheets';
 import { syncFacultyLogsDirectToGoogleSheet } from '../utils/googleSheetsApi';
 import { FACULTY_DIRECTORY } from '../timetableData';
@@ -977,6 +978,30 @@ export const GoogleSheetsSettingsModal: React.FC<GoogleSheetsSettingsModalProps>
           {/* TAB 3: APPS SCRIPT WEB APP METHOD */}
           {activeTab === 'script' && (
             <div className="space-y-4">
+              {/* Vercel Env Variable Status Badge */}
+              <div className="p-3 bg-slate-900 text-white rounded-xl border border-slate-800 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${isSheetsUrlConfiguredInEnv() ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold truncate">
+                      {isSheetsUrlConfiguredInEnv()
+                        ? 'Configured via Vercel Environment Variable (VITE_GOOGLE_SHEETS_WEB_APP_URL)'
+                        : 'Web App URL configured via local/browser storage'}
+                    </p>
+                    <p className="text-[10px] text-slate-400 truncate">
+                      Enables frictionless zero-auth submissions for all faculty and programmers
+                    </p>
+                  </div>
+                </div>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase tracking-wider shrink-0 ${
+                  isSheetsUrlConfiguredInEnv()
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-700/50'
+                    : 'bg-amber-950 text-amber-300 border-amber-700/50'
+                }`}>
+                  {isSheetsUrlConfiguredInEnv() ? 'Vercel Env Active' : 'Local/Dynamic'}
+                </span>
+              </div>
+
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-slate-900">
@@ -1072,6 +1097,29 @@ export const GoogleSheetsSettingsModal: React.FC<GoogleSheetsSettingsModalProps>
                     <span className="font-bold text-rose-700 shrink-0">Step 6:</span>
                     <span>Click <strong>Deploy</strong>. Copy the URL ending in <code>/exec</code>, paste it above, and click <strong>Test Connection</strong>.</span>
                   </div>
+                </div>
+              </div>
+
+              {/* Vercel Environment Variables Quick Reference */}
+              <div className="bg-slate-900 text-white border border-slate-800 rounded-xl p-3.5 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-xs flex items-center gap-1.5 text-white">
+                    <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Vercel Dashboard Environment Variables</span>
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-mono">Production Deployment</span>
+                </div>
+                <p className="text-slate-300 text-[11px] leading-relaxed">
+                  To persist the Web App URL and Firebase config across all devices in production on Vercel, set these environment variables in your <strong>Vercel Project Settings &gt; Environment Variables</strong>:
+                </p>
+                <div className="bg-slate-950 p-2.5 rounded-lg font-mono text-[10px] text-slate-300 space-y-1 overflow-x-auto border border-slate-800">
+                  <div className="text-emerald-400 font-bold"># Google Sheets Web App URL (Zero-Auth Submissions)</div>
+                  <div>VITE_GOOGLE_SHEETS_WEB_APP_URL={appsScriptUrlInput || 'https://script.google.com/macros/s/.../exec'}</div>
+                  <div className="text-blue-400 font-bold pt-1"># Master Department Spreadsheet ID</div>
+                  <div>VITE_SPREADSHEET_ID={currentSpreadsheetId || '1A5y47v00hJahMnb8NKQDbXIVlSeXvH5vDS0g9mWwreI'}</div>
+                  <div className="text-amber-400 font-bold pt-1"># Firebase Web Authentication &amp; Cloud Database</div>
+                  <div>VITE_FIREBASE_API_KEY=&lt;Your_Firebase_API_Key&gt;</div>
+                  <div>VITE_FIREBASE_PROJECT_ID=&lt;Your_Firebase_Project_ID&gt;</div>
                 </div>
               </div>
 

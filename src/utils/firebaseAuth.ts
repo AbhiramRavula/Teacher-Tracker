@@ -1,21 +1,11 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
-  getAuth,
   signInWithPopup,
   GoogleAuthProvider,
   onAuthStateChanged,
   User,
   signOut,
 } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
-
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-
-const provider = new GoogleAuthProvider();
-// Google Workspace Scopes
-provider.addScope('https://www.googleapis.com/auth/spreadsheets');
-provider.addScope('https://www.googleapis.com/auth/drive.file');
+import { auth, googleProvider as provider } from '../firebase';
 
 // Flag to indicate if we are in the middle of a sign-in flow
 let isSigningIn = false;
