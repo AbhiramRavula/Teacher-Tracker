@@ -1,4 +1,4 @@
-import { ActivityLog, GoogleSheetsLogItem, GoogleSheetsPayload, Role } from '../types';
+import { ActivityLog, GoogleSheetsLogItem, GoogleSheetsPayload, PeriodSlotData, Role } from '../types';
 import { BASE_TIME_SLOTS, getSlotTimeLabel } from '../constants';
 import {
   extractSpreadsheetId,
@@ -459,26 +459,37 @@ export { exportMultiTabGrandExcel };
  * duplicate tab prevention, and duplicate row idempotency.
  */
 export const SAMPLE_APPS_SCRIPT_CODE = `/**
- * Google Apps Script - Faculty & Staff Daily Activity Tracker
- * Production Edition: 11-Column Unified Schema & Fingerprint Deduplication
+ * =========================================================================================
+ * Faculty & Staff Daily Activity Tracker - Production Backend
+ * Matrusri Engineering College | Department of Information Technology
+ * Edition: Institutional Sectional Master Report Layout & Same-Day Upsert Logic
+ * =========================================================================================
  *
- * GUARANTEES:
- * 1. ZERO DUPLICATE ROWS (FINGERPRINTING): Computes a unique signature
- *    (Date + Faculty + Slot + Topic) and checks the recent row history.
- *    Any identical resubmission within 5 minutes or duplicate network packet is silently skipped.
- * 2. 100% APPEND-ONLY: Submissions append to the bottom of Faculty Tabs & Master_Daily_Report.
- *    Historical logs are NEVER overwritten, cleared, or truncated.
- * 3. CLEAN 11-COLUMN UNIFIED SCHEMA FOR BOTH TABS:
- *    [Timestamp, Date, Day of Week, Faculty Name, Period Slot, Section, Course Name, Credits, Unit No, Topic / Activity, Submission Status]
- * 4. CONCURRENCY MUTEX: ScriptLock safely sequences concurrent submissions.
+ * ARCHITECTURAL FEATURES:
+ * 1. INSTITUTIONAL MASTER_DAILY_REPORT SECTIONAL LAYOUT:
+ *    - Replicates the official MECS IT Dept layout with colored institutional banners:
+ *      • Top Headers: "Matrusri Engineering College" & "Department of Information Technology"
+ *      • Grid: [SNO, Date, Name of the Faculty, Section, Course Name, credits, Class Hour, Unit No, Topic Name]
+ *      • Grouped Sub-Tables:
+ *        - III SEM IT A CLASS REPORT
+ *        - V SEM IT A CLASS REPORT
+ *        - VII SEM IT A CLASS REPORT
+ *        - III SEM IT B CLASS REPORT
+ *        - V SEM IT B CLASS REPORT
+ *        - VII SEM IT B CLASS REPORT
+ *        - DEPARTMENTAL & LAB DUTIES REPORT
  *
- * HOW TO DEPLOY:
- * 1. Open your Google Sheet.
- * 2. Click Extensions > Apps Script.
- * 3. Delete any previous code and paste this entire script.
- * 4. Click Deploy > Manage deployments > Edit (pencil icon) > Version: "New version" > Deploy.
- * 5. Set "Execute as": "Me" & "Who has access": "Anyone".
- * 6. Copy the Web App URL (ends in /exec).
+ * 2. SAME-DAY SMART UPSERT (ZERO DUPLICATE DAYS):
+ *    - Faculty Tab: If submissions for that Date already exist, they are replaced in-place.
+ *    - Master Report: If entries for that (Date + Faculty + Slot) exist, they are updated in-place.
+ *    - Allows faculty to edit/re-submit daily logs anytime to fix mistakes with zero duplicate clutter.
+ *
+ * 3. INDIVIDUAL FACULTY TAB LAYOUT:
+ *    - Dedicated personal activity registers with college header banners and sequential SNO.
+ *
+ * 4. CONCURRENCY MUTEX LOCK:
+ *    - LockService.getScriptLock() (30s timeout) sequences concurrent staff submissions.
+ * =========================================================================================
  */
 
 function doPost(e) {
@@ -486,7 +497,6 @@ function doPost(e) {
   var hasLock = false;
 
   try {
-    // Acquire mutex lock with 30s timeout to handle concurrent staffroom submissions
     hasLock = lock.tryLock(30000);
     if (!hasLock) {
       return createJsonResponse({
@@ -502,38 +512,32 @@ function doPost(e) {
 
     var data = JSON.parse(rawData);
     var facultyName = (data.facultyName || "General Staff").trim();
-    var date = data.date || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+    var dateIso = data.date || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
     var logs = data.logs || [];
 
     if (!logs || logs.length === 0) {
-      return createJsonResponse({ status: "success", message: "No activity logs to register.", rowsAdded: 0 });
+      return createJsonResponse({ status: "success", message: "No activity logs to register.", rowsUpdated: 0 });
     }
 
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var now = new Date();
-    var dayOfWeek = Utilities.formatDate(new Date(date + "T00:00:00"), Session.getScriptTimeZone(), "EEEE");
-    var timestampStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+    var displayDate = formatDisplayDate(dateIso);
 
-    // 1. Get or create faculty personal tab (Zero duplicate tabs)
-    var tabResult = getOrCreateFacultySheet(ss, facultyName);
-    var facultySheet = tabResult.sheet;
-    var safeTabName = facultySheet.getName();
+    // 1. Process Individual Faculty Tab (Same-Day Upsert)
+    var facultyTab = getOrCreateFacultySheet(ss, facultyName);
+    var facultyUpsertCount = upsertFacultyTabRows(facultyTab, displayDate, dateIso, facultyName, logs);
 
-    // 2. Append rows to Faculty Personal Tab with Fingerprint Deduplication
-    var facultyRowsAdded = appendFacultyLogRows(facultySheet, date, dayOfWeek, facultyName, logs, timestampStr);
-
-    // 3. Append rows to Master_Daily_Report with Fingerprint Deduplication
+    // 2. Process Master_Daily_Report (Sectional Layout + Same-Day Upsert)
     var masterSheet = getOrCreateMasterReportSheet(ss);
-    var masterRowsAdded = appendMasterReportRows(masterSheet, date, dayOfWeek, facultyName, logs, timestampStr);
+    var masterUpsertCount = upsertMasterReportRows(masterSheet, displayDate, dateIso, facultyName, logs);
 
     return createJsonResponse({
       status: "success",
-      message: "Successfully recorded " + facultyRowsAdded + " new activities for " + facultyName + " on tab '" + safeTabName + "' & Master_Daily_Report (Deduplicated & Clean 11-Column Schema)",
+      message: "Successfully synchronized " + logs.length + " activities for " + facultyName + " on " + displayDate + " (Tab: '" + facultyTab.getName() + "' & Master_Daily_Report).",
       faculty: facultyName,
-      sheetTab: safeTabName,
-      rowsAdded: facultyRowsAdded,
-      masterRowsAdded: masterRowsAdded,
-      tabCreated: tabResult.isNew
+      date: displayDate,
+      facultyTab: facultyTab.getName(),
+      facultyRowsUpdated: facultyUpsertCount,
+      masterRowsUpdated: masterUpsertCount
     });
 
   } catch (err) {
@@ -549,14 +553,19 @@ function doPost(e) {
 }
 
 /**
- * Computes a unique signature hash for a specific slot duty row.
+ * Formats YYYY-MM-DD into college display format D-M-YY (e.g. "10-9-26")
  */
-function generateRowFingerprint(date, facultyName, slot, topicName) {
-  var d = (date || "").toString().trim().toLowerCase();
-  var f = (facultyName || "").toString().trim().toLowerCase();
-  var s = (slot || "").toString().trim().toLowerCase();
-  var t = (topicName || "").toString().trim().toLowerCase();
-  return d + "|" + f + "|" + s + "|" + t;
+function formatDisplayDate(isoDateStr) {
+  if (!isoDateStr) return "";
+  var parts = isoDateStr.split("-");
+  if (parts.length === 3) {
+    var year = parts[0];
+    var month = parseInt(parts[1], 10);
+    var day = parseInt(parts[2], 10);
+    var shortYear = year.length === 4 ? year.substring(2) : year;
+    return day + "-" + month + "-" + shortYear;
+  }
+  return isoDateStr;
 }
 
 /**
@@ -566,298 +575,551 @@ function sanitizeTopicContent(raw) {
   if (!raw) return "";
   return raw
     .toString()
-    .replace(/^\[.*?\]\s*/g, "")
-    .replace(/\*\*/g, "")
-    .replace(/\*/g, "")
+    .replace(/^\\[.*?\\]\\s*/g, "")
+    .replace(/\\*\\*/g, "")
+    .replace(/\\*/g, "")
     .trim();
 }
 
 /**
- * Reads recent row signatures from a sheet to prevent duplicate appends.
+ * Categorizes an individual slot entry into its designated class report section.
  */
-function getRecentRowSignatures(sheet, maxLookback) {
-  var signatures = {};
-  var lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return signatures;
+function determineSectionCategory(section, courseName, slot) {
+  var sec = (section || "").toString().toUpperCase().trim();
+  var crs = (courseName || "").toString().toUpperCase().trim();
 
-  var lookback = maxLookback || 100;
-  var startRow = Math.max(2, lastRow - lookback + 1);
-  var numRows = lastRow - startRow + 1;
-  if (numRows <= 0) return signatures;
-
-  var numCols = Math.min(sheet.getLastColumn(), 11);
-  if (numCols < 5) return signatures;
-
-  var values = sheet.getRange(startRow, 1, numRows, numCols).getValues();
-  for (var i = 0; i < values.length; i++) {
-    var row = values[i];
-    var rowDate = (row[1] || "").toString().trim();
-    var rowFaculty = (row[3] || "").toString().trim();
-    var rowSlot = (row[4] || "").toString().trim();
-    var rowTopic = (row[9] || "").toString().trim();
-
-    // Fallback if older 10-column layout was used
-    if (!rowFaculty && numCols === 10) {
-      rowSlot = (row[3] || "").toString().trim();
-      rowTopic = (row[8] || "").toString().trim();
-      rowFaculty = sheet.getName();
-    }
-
-    if (rowDate && rowSlot) {
-      var sig = generateRowFingerprint(rowDate, rowFaculty, rowSlot, rowTopic);
-      signatures[sig] = true;
-    }
+  // III SEM IT A
+  if (
+    (sec.indexOf("III") !== -1 && (sec.indexOf("A") !== -1 || sec.indexOf("SEC-A") !== -1)) ||
+    crs.indexOf("WTLAB") !== -1 || crs.indexOf("WT LAB") !== -1 ||
+    (sec.indexOf("3") === 0 && sec.indexOf("A") !== -1)
+  ) {
+    return "III SEM IT A CLASS REPORT";
   }
-  return signatures;
+
+  // V SEM IT A
+  if (
+    (sec.indexOf("V") !== -1 && sec.indexOf("VII") === -1 && (sec.indexOf("A") !== -1 || sec.indexOf("SEC-A") !== -1)) ||
+    crs === "SE" || (crs.indexOf("PPL") !== -1 && sec.indexOf("B") === -1) ||
+    crs.indexOf("DISASTER") !== -1 ||
+    (sec.indexOf("5") === 0 && sec.indexOf("A") !== -1)
+  ) {
+    return "V SEM IT A CLASS REPORT";
+  }
+
+  // VII SEM IT A
+  if (
+    (sec.indexOf("VII") !== -1 && (sec.indexOf("A") !== -1 || sec.indexOf("SEC-A") !== -1)) ||
+    (sec.indexOf("7") === 0 && sec.indexOf("A") !== -1)
+  ) {
+    return "VII SEM IT A CLASS REPORT";
+  }
+
+  // III SEM IT B
+  if (
+    (sec.indexOf("III") !== -1 && (sec.indexOf("B") !== -1 || sec.indexOf("SEC-B") !== -1)) ||
+    crs === "F&A" || crs === "MFIT" || crs.indexOf("F&A") !== -1 ||
+    (sec.indexOf("3") === 0 && sec.indexOf("B") !== -1)
+  ) {
+    return "III SEM IT B CLASS REPORT";
+  }
+
+  // V SEM IT B
+  if (
+    (sec.indexOf("V") !== -1 && sec.indexOf("VII") === -1 && (sec.indexOf("B") !== -1 || sec.indexOf("SEC-B") !== -1)) ||
+    crs === "AI" || crs === "FSD" || crs === "OOAD" ||
+    (sec.indexOf("5") === 0 && sec.indexOf("B") !== -1)
+  ) {
+    return "V SEM IT B CLASS REPORT";
+  }
+
+  // VII SEM IT B
+  if (
+    (sec.indexOf("VII") !== -1 && (sec.indexOf("B") !== -1 || sec.indexOf("SEC-B") !== -1)) ||
+    (sec.indexOf("7") === 0 && sec.indexOf("B") !== -1)
+  ) {
+    return "VII SEM IT B CLASS REPORT";
+  }
+
+  // Default Departmental & Lab Duties
+  return "DEPARTMENTAL & LAB DUTIES REPORT";
 }
 
 /**
- * Appends duty log rows strictly to the bottom of the faculty member's personal sheet tab.
- * Deduplicates automatically against recent submissions.
+ * Section order list matching reference sheet
  */
-function appendFacultyLogRows(sheet, date, dayOfWeek, facultyName, logs, timestampStr) {
-  var lastRow = sheet.getLastRow();
-  if (lastRow === 0) {
-    formatUnifiedSheetHeaders(sheet);
-    lastRow = 1;
-  }
-
-  var existingSignatures = getRecentRowSignatures(sheet, 100);
-  var rowsToAppend = [];
-
-  for (var i = 0; i < logs.length; i++) {
-    var item = logs[i];
-    var cleanSlot = (item.slot || ("P" + (i + 1))).trim();
-    var cleanCourse = (item.courseName || item.course || "-").trim();
-    var cleanSection = (item.section || "-").trim();
-    var cleanCredits = (item.credits || "3").toString().trim();
-    var cleanUnit = (item.unitNo || item.unit || "-").toString().trim();
-    var cleanTopic = sanitizeTopicContent(item.topicName || item.activity || "");
-
-    var sig = generateRowFingerprint(date, facultyName, cleanSlot, cleanTopic);
-    if (existingSignatures[sig]) {
-      continue; // Skip duplicate within 5-minute window or re-sent payload
-    }
-
-    rowsToAppend.push([
-      timestampStr,
-      date,
-      dayOfWeek,
-      facultyName,
-      cleanSlot,
-      cleanSection,
-      cleanCourse,
-      cleanCredits,
-      cleanUnit,
-      cleanTopic,
-      "Submitted"
-    ]);
-
-    existingSignatures[sig] = true;
-  }
-
-  if (rowsToAppend.length > 0) {
-    var targetStartRow = lastRow + 1;
-    var range = sheet.getRange(targetStartRow, 1, rowsToAppend.length, 11);
-    range.setValues(rowsToAppend);
-  }
-
-  return rowsToAppend.length;
-}
+var SECTION_ORDER = [
+  "III SEM IT A CLASS REPORT",
+  "V SEM IT A CLASS REPORT",
+  "VII SEM IT A CLASS REPORT",
+  "III SEM IT B CLASS REPORT",
+  "V SEM IT B CLASS REPORT",
+  "VII SEM IT B CLASS REPORT",
+  "DEPARTMENTAL & LAB DUTIES REPORT"
+];
 
 /**
- * Appends duty log rows strictly to the bottom of the Master_Daily_Report sheet.
- * Deduplicates automatically against recent submissions.
+ * =========================================================================================
+ * 1. MASTER DAILY REPORT LOGIC (SECTIONAL GROUPING + SAME-DAY UPSERT)
+ * =========================================================================================
  */
-function appendMasterReportRows(masterSheet, date, dayOfWeek, facultyName, logs, timestampStr) {
-  var lastRow = masterSheet.getLastRow();
-  if (lastRow === 0) {
-    formatUnifiedSheetHeaders(masterSheet);
-    lastRow = 1;
-  }
 
-  var existingSignatures = getRecentRowSignatures(masterSheet, 150);
-  var masterRows = [];
-
-  for (var i = 0; i < logs.length; i++) {
-    var item = logs[i];
-    var cleanSlot = (item.slot || ("P" + (i + 1))).trim();
-    var cleanCourse = (item.courseName || item.course || "-").trim();
-    var cleanSection = (item.section || "-").trim();
-    var cleanCredits = (item.credits || "3").toString().trim();
-    var cleanUnit = (item.unitNo || item.unit || "-").toString().trim();
-    var cleanTopic = sanitizeTopicContent(item.topicName || item.activity || "");
-
-    var sig = generateRowFingerprint(date, facultyName, cleanSlot, cleanTopic);
-    if (existingSignatures[sig]) {
-      continue; // Skip duplicate
-    }
-
-    masterRows.push([
-      timestampStr,
-      date,
-      dayOfWeek,
-      facultyName,
-      cleanSlot,
-      cleanSection,
-      cleanCourse,
-      cleanCredits,
-      cleanUnit,
-      cleanTopic,
-      "Submitted"
-    ]);
-
-    existingSignatures[sig] = true;
-  }
-
-  if (masterRows.length > 0) {
-    var targetStartRow = lastRow + 1;
-    var range = masterSheet.getRange(targetStartRow, 1, masterRows.length, 11);
-    range.setValues(masterRows);
-  }
-
-  return masterRows.length;
-}
-
-/**
- * Normalizes tab names for robust, case-insensitive comparison.
- */
-function normalizeTabKey(name) {
-  if (!name) return "";
-  return name
-    .toString()
-    .toLowerCase()
-    .replace(/[:\\/?*\[\]']/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/**
- * Formats a user-friendly display tab title within Google Sheets 100-char limits.
- */
-function sanitizeTabTitle(name) {
-  if (!name) return "General Staff";
-  var cleaned = name
-    .toString()
-    .replace(/[:\\/?*\[\]']/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return cleaned.substring(0, 95) || "Faculty Log";
-}
-
-/**
- * Finds an existing sheet using ss.getSheetByName() and normalized, case-insensitive matching.
- * If not found, creates the sheet and formats headers atomically.
- */
-function getOrCreateFacultySheet(ss, facultyName) {
-  var displayTitle = sanitizeTabTitle(facultyName);
-
-  // 1. Direct fast lookup using ss.getSheetByName()
-  var directMatch = ss.getSheetByName(displayTitle);
-  if (directMatch) {
-    return { sheet: directMatch, isNew: false };
-  }
-
-  // 2. Case-insensitive and whitespace-normalized check across all existing sheets
-  var targetKey = normalizeTabKey(facultyName);
-  var sheets = ss.getSheets();
-
-  for (var i = 0; i < sheets.length; i++) {
-    var sheetName = sheets[i].getName();
-    if (normalizeTabKey(sheetName) === targetKey) {
-      return { sheet: sheets[i], isNew: false };
-    }
-  }
-
-  // Tab does not exist yet -> Create with standardized title
-  try {
-    var newSheet = ss.insertSheet(displayTitle);
-    formatUnifiedSheetHeaders(newSheet);
-    return { sheet: newSheet, isNew: true };
-  } catch (e) {
-    var fallback = ss.getSheetByName(displayTitle);
-    if (fallback) {
-      return { sheet: fallback, isNew: false };
-    }
-    var retrySheets = ss.getSheets();
-    for (var j = 0; j < retrySheets.length; j++) {
-      if (normalizeTabKey(retrySheets[j].getName()) === targetKey) {
-        return { sheet: retrySheets[j], isNew: false };
-      }
-    }
-    throw e;
-  }
-}
-
-/**
- * Gets or creates the official institutional Master_Daily_Report tab
- */
 function getOrCreateMasterReportSheet(ss) {
-  var directMaster = ss.getSheetByName("Master_Daily_Report") || ss.getSheetByName("Grand_Daily_Report");
-  if (directMaster) {
-    return directMaster;
+  var targetNames = ["Master_Daily_Report", "Grand_Daily_Report"];
+  for (var t = 0; t < targetNames.length; t++) {
+    var s = ss.getSheetByName(targetNames[t]);
+    if (s) return s;
   }
 
-  var targetKeys = ["masterdailyreport", "granddailyreport"];
   var sheets = ss.getSheets();
   for (var i = 0; i < sheets.length; i++) {
-    var k = normalizeTabKey(sheets[i].getName());
-    if (targetKeys.indexOf(k) !== -1) {
+    var k = sheets[i].getName().toLowerCase().replace(/[\\s_]/g, "");
+    if (k === "masterdailyreport" || k === "granddailyreport") {
       return sheets[i];
     }
   }
 
-  var masterSheet = ss.insertSheet("Master_Daily_Report", 0);
-  formatUnifiedSheetHeaders(masterSheet);
-  return masterSheet;
+  // Build new master sheet with institutional styling
+  var master = ss.insertSheet("Master_Daily_Report", 0);
+  initializeMasterReportTemplate(master);
+  return master;
 }
 
 /**
- * Applies identical clean 11-column header rows, frozen panes, and widths across all sheets
+ * Initializes the entire institutional template on Master_Daily_Report if empty
  */
-function formatUnifiedSheetHeaders(sheet) {
-  var headers = [
-    "Timestamp",
-    "Date",
-    "Day of Week",
-    "Faculty Name",
-    "Period Slot",
-    "Section",
-    "Course Name",
-    "Credits",
-    "Unit No",
-    "Topic / Activity",
-    "Submission Status"
-  ];
+function initializeMasterReportTemplate(sheet) {
+  sheet.clear();
 
-  var headerRange = sheet.getRange(1, 1, 1, headers.length);
-  headerRange.setValues([headers]);
-  headerRange.setFontWeight("bold");
-  headerRange.setBackground("#0F172A"); // Slate 900
-  headerRange.setFontColor("#FFFFFF");
-  headerRange.setHorizontalAlignment("center");
-  headerRange.setVerticalAlignment("middle");
-  sheet.setRowHeight(1, 35);
+  var pinkBg = "#FCE8E6";   // Soft peach/pink
+  var tealBg = "#8EA9DB";   // Soft institutional teal/slate
+  var darkText = "#000000";
 
-  sheet.setColumnWidth(1, 160); // Timestamp
-  sheet.setColumnWidth(2, 100); // Date
-  sheet.setColumnWidth(3, 100); // Day of Week
-  sheet.setColumnWidth(4, 180); // Faculty Name
-  sheet.setColumnWidth(5, 95);  // Period Slot
-  sheet.setColumnWidth(6, 85);  // Section
-  sheet.setColumnWidth(7, 180); // Course Name
-  sheet.setColumnWidth(8, 70);  // Credits
-  sheet.setColumnWidth(9, 70);  // Unit No
-  sheet.setColumnWidth(10, 360); // Topic / Activity
-  sheet.setColumnWidth(11, 110); // Submission Status
+  // Row 1: Spacer
+  sheet.setRowHeight(1, 15);
 
-  sheet.setFrozenRows(1);
+  // Row 2: College Name Banner
+  sheet.getRange(2, 1, 1, 9).merge()
+    .setValue("Matrusri Engineering College")
+    .setFontWeight("bold")
+    .setFontSize(13)
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle")
+    .setBackground(pinkBg);
+  sheet.setRowHeight(2, 30);
+
+  // Row 3: Department Name Banner
+  sheet.getRange(3, 1, 1, 9).merge()
+    .setValue("Department of Information Technology")
+    .setFontWeight("bold")
+    .setFontSize(11)
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle")
+    .setBackground(pinkBg);
+  sheet.setRowHeight(3, 25);
+
+  // Row 4: Column Headers (Section A)
+  var headers = ["SNO", "Date", "Name of the Faculty", "Section", "Course Name", "credits", "Class Hour", "Unit No", "Topic Name"];
+  sheet.getRange(4, 1, 1, 9)
+    .setValues([headers])
+    .setFontWeight("bold")
+    .setFontSize(10)
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle")
+    .setBackground(tealBg)
+    .setFontColor(darkText);
+  sheet.setRowHeight(4, 28);
+
+  // Set column widths
+  sheet.setColumnWidth(1, 55);  // SNO
+  sheet.setColumnWidth(2, 85);  // Date
+  sheet.setColumnWidth(3, 180); // Name of the Faculty
+  sheet.setColumnWidth(4, 85);  // Section
+  sheet.setColumnWidth(5, 170); // Course Name
+  sheet.setColumnWidth(6, 65);  // credits
+  sheet.setColumnWidth(7, 95);  // Class Hour
+  sheet.setColumnWidth(8, 85);  // Unit No
+  sheet.setColumnWidth(9, 380); // Topic Name
+
+  var curRow = 5;
+
+  // Insert section headers with placeholder rows
+  for (var i = 0; i < SECTION_ORDER.length; i++) {
+    var secName = SECTION_ORDER[i];
+
+    // If switching to Section B, repeat column header bar
+    if (secName === "III SEM IT B CLASS REPORT") {
+      sheet.getRange(curRow, 1, 1, 9).setValues([headers])
+        .setFontWeight("bold")
+        .setFontSize(10)
+        .setHorizontalAlignment("center")
+        .setVerticalAlignment("middle")
+        .setBackground(tealBg)
+        .setFontColor(darkText);
+      sheet.setRowHeight(curRow, 28);
+      curRow++;
+    }
+
+    // Section Title Banner
+    sheet.getRange(curRow, 1, 1, 9).merge()
+      .setValue(secName)
+      .setFontWeight("bold")
+      .setFontSize(10)
+      .setHorizontalAlignment("center")
+      .setVerticalAlignment("middle")
+      .setBackground(pinkBg);
+    sheet.setRowHeight(curRow, 24);
+    curRow++;
+  }
+}
+
+/**
+ * Upserts submitted duty rows into Master_Daily_Report under their appropriate section blocks.
+ * If same-day entries exist for that Faculty + Date + Slot, updates them in-place.
+ */
+function upsertMasterReportRows(sheet, displayDate, dateIso, facultyName, logs) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 4) {
+    initializeMasterReportTemplate(sheet);
+    lastRow = sheet.getLastRow();
+  }
+
+  // Scan all rows to identify section boundaries and existing faculty entries
+  var numRows = sheet.getLastRow();
+  var col1Values = sheet.getRange(1, 1, numRows, 1).getValues();
+  var col2Values = sheet.getRange(1, 2, numRows, 1).getValues();
+  var col3Values = sheet.getRange(1, 3, numRows, 1).getValues();
+  var col7Values = sheet.getRange(1, 7, numRows, 1).getValues();
+
+  var updatedCount = 0;
+
+  for (var i = 0; i < logs.length; i++) {
+    var item = logs[i];
+    var cleanSlot = (item.slot || ("P" + (i + 1))).trim();
+    var cleanCourse = (item.courseName || item.course || "-").trim();
+    var cleanSection = (item.section || "-").trim();
+    var cleanCredits = (item.credits || "3").toString().trim();
+    var cleanUnit = (item.unitNo || item.unit || "-").toString().trim();
+    var cleanTopic = sanitizeTopicContent(item.topicName || item.activity || "");
+
+    var targetSection = determineSectionCategory(cleanSection, cleanCourse, cleanSlot);
+
+    // Find section banner row
+    var sectionHeaderRow = -1;
+    var nextSectionRow = -1;
+
+    for (var r = 1; r <= numRows; r++) {
+      var cellVal = (col1Values[r - 1][0] || "").toString().trim();
+      if (cellVal === targetSection) {
+        sectionHeaderRow = r;
+        break;
+      }
+    }
+
+    // If section banner not found, create it at bottom
+    if (sectionHeaderRow === -1) {
+      sectionHeaderRow = sheet.getLastRow() + 1;
+      sheet.getRange(sectionHeaderRow, 1, 1, 9).merge()
+        .setValue(targetSection)
+        .setFontWeight("bold")
+        .setFontSize(10)
+        .setHorizontalAlignment("center")
+        .setVerticalAlignment("middle")
+        .setBackground("#FCE8E6");
+      sheet.setRowHeight(sectionHeaderRow, 24);
+      numRows = sectionHeaderRow;
+    }
+
+    // Find next section boundary
+    for (var n = sectionHeaderRow + 1; n <= numRows; n++) {
+      var checkVal = (col1Values[n - 1][0] || "").toString().trim();
+      var checkHeader = (col1Values[n - 1][0] || "").toString().toUpperCase();
+      if (checkHeader === "SNO" || SECTION_ORDER.indexOf(checkVal) !== -1) {
+        nextSectionRow = n;
+        break;
+      }
+    }
+    if (nextSectionRow === -1) {
+      nextSectionRow = numRows + 1;
+    }
+
+    // Check if matching row already exists within this section (Same-Day Upsert)
+    var existingRowIdx = -1;
+    for (var scan = sectionHeaderRow + 1; scan < nextSectionRow; scan++) {
+      var rowDate = (col2Values[scan - 1][0] || "").toString().trim();
+      var rowFaculty = (col3Values[scan - 1][0] || "").toString().trim().toLowerCase();
+      var rowSlot = (col7Values[scan - 1][0] || "").toString().trim().toLowerCase();
+
+      var isDateMatch = (rowDate === displayDate || rowDate === dateIso);
+      var isFacultyMatch = (rowFaculty === facultyName.toLowerCase());
+      var isSlotMatch = (rowSlot === cleanSlot.toLowerCase());
+
+      if (isDateMatch && isFacultyMatch && isSlotMatch) {
+        existingRowIdx = scan;
+        break;
+      }
+    }
+
+    var rowValues = [
+      1, // Temporary SNO, re-indexed below
+      displayDate,
+      facultyName,
+      cleanSection,
+      cleanCourse,
+      cleanCredits,
+      cleanSlot,
+      cleanUnit,
+      cleanTopic
+    ];
+
+    if (existingRowIdx !== -1) {
+      // UPDATE in place (preserve SNO)
+      var oldSno = sheet.getRange(existingRowIdx, 1).getValue() || 1;
+      rowValues[0] = oldSno;
+      sheet.getRange(existingRowIdx, 1, 1, 9).setValues([rowValues]);
+      updatedCount++;
+    } else {
+      // INSERT new row right before next section boundary
+      sheet.insertRowBefore(nextSectionRow);
+      sheet.getRange(nextSectionRow, 1, 1, 9).setValues([rowValues])
+        .setFontSize(10)
+        .setVerticalAlignment("middle")
+        .setHorizontalAlignment("left");
+      sheet.getRange(nextSectionRow, 1, 1, 2).setHorizontalAlignment("center");
+      sheet.getRange(nextSectionRow, 4, 1, 1).setHorizontalAlignment("center");
+      sheet.getRange(nextSectionRow, 6, 1, 3).setHorizontalAlignment("center");
+      sheet.setRowHeight(nextSectionRow, 22);
+
+      // Refresh cached arrays for next slot in loop
+      numRows = sheet.getLastRow();
+      col1Values = sheet.getRange(1, 1, numRows, 1).getValues();
+      col2Values = sheet.getRange(1, 2, numRows, 1).getValues();
+      col3Values = sheet.getRange(1, 3, numRows, 1).getValues();
+      col7Values = sheet.getRange(1, 7, numRows, 1).getValues();
+      updatedCount++;
+    }
+
+    // Re-index SNO sequentially (1, 2, 3...) for this section
+    reindexSectionSno(sheet, targetSection);
+  }
+
+  return updatedCount;
+}
+
+/**
+ * Re-indexes S.No sequentially (1, 2, 3...) for a given section block in Master_Daily_Report
+ */
+function reindexSectionSno(sheet, sectionName) {
+  var numRows = sheet.getLastRow();
+  var col1Values = sheet.getRange(1, 1, numRows, 1).getValues();
+
+  var startRow = -1;
+  var endRow = -1;
+
+  for (var r = 1; r <= numRows; r++) {
+    if ((col1Values[r - 1][0] || "").toString().trim() === sectionName) {
+      startRow = r + 1;
+      break;
+    }
+  }
+
+  if (startRow === -1) return;
+
+  for (var e = startRow; e <= numRows; e++) {
+    var val = (col1Values[e - 1][0] || "").toString().trim();
+    if (SECTION_ORDER.indexOf(val) !== -1 || val.toUpperCase() === "SNO") {
+      endRow = e - 1;
+      break;
+    }
+  }
+  if (endRow === -1) endRow = numRows;
+
+  var sno = 1;
+  for (var row = startRow; row <= endRow; row++) {
+    var checkDate = sheet.getRange(row, 2).getValue();
+    if (checkDate) {
+      sheet.getRange(row, 1).setValue(sno).setHorizontalAlignment("center");
+      sno++;
+    }
+  }
+}
+
+/**
+ * =========================================================================================
+ * 2. INDIVIDUAL FACULTY TAB LOGIC (SAME-DAY UPSERT)
+ * =========================================================================================
+ */
+
+function getOrCreateFacultySheet(ss, facultyName) {
+  var cleanTitle = (facultyName || "General Staff").toString().replace(/[:\\\\/?*\\[\\]']/g, "").trim().substring(0, 95);
+  var sheet = ss.getSheetByName(cleanTitle);
+  if (sheet) return sheet;
+
+  // Normalized search
+  var targetKey = cleanTitle.toLowerCase().replace(/\\s+/g, "");
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].getName().toLowerCase().replace(/\\s+/g, "") === targetKey) {
+      return sheets[i];
+    }
+  }
+
+  var newSheet = ss.insertSheet(cleanTitle);
+  initializeFacultyTabHeaders(newSheet, facultyName);
+  return newSheet;
+}
+
+/**
+ * Initializes clean institutional headers on an individual faculty member's tab
+ */
+function initializeFacultyTabHeaders(sheet, facultyName) {
+  sheet.clear();
+
+  var pinkBg = "#FCE8E6";
+  var tealBg = "#8EA9DB";
+
+  // Row 1: Spacer
+  sheet.setRowHeight(1, 12);
+
+  // Row 2: College Name Banner
+  sheet.getRange(2, 1, 1, 9).merge()
+    .setValue("Matrusri Engineering College")
+    .setFontWeight("bold")
+    .setFontSize(12)
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle")
+    .setBackground(pinkBg);
+  sheet.setRowHeight(2, 28);
+
+  // Row 3: Department & Faculty Banner
+  sheet.getRange(3, 1, 1, 9).merge()
+    .setValue("Department of Information Technology - Activity Log: " + facultyName)
+    .setFontWeight("bold")
+    .setFontSize(10)
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle")
+    .setBackground(pinkBg);
+  sheet.setRowHeight(3, 24);
+
+  // Row 4: Column Headers
+  var headers = ["SNO", "Date", "Class Hour", "Section", "Course Name", "credits", "Unit No", "Topic Name / Activity Covered", "Status"];
+  sheet.getRange(4, 1, 1, 9)
+    .setValues([headers])
+    .setFontWeight("bold")
+    .setFontSize(10)
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle")
+    .setBackground(tealBg);
+  sheet.setRowHeight(4, 28);
+
+  // Set widths
+  sheet.setColumnWidth(1, 55);  // SNO
+  sheet.setColumnWidth(2, 90);  // Date
+  sheet.setColumnWidth(3, 90);  // Class Hour
+  sheet.setColumnWidth(4, 85);  // Section
+  sheet.setColumnWidth(5, 170); // Course Name
+  sheet.setColumnWidth(6, 65);  // credits
+  sheet.setColumnWidth(7, 85);  // Unit No
+  sheet.setColumnWidth(8, 380); // Topic Name
+  sheet.setColumnWidth(9, 100); // Status
+
+  sheet.setFrozenRows(4);
+}
+
+/**
+ * Upserts daily logs into the faculty's personal tab:
+ * If entries for this date already exist, replaces them in-place with the latest submission.
+ */
+function upsertFacultyTabRows(sheet, displayDate, dateIso, facultyName, logs) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 4) {
+    initializeFacultyTabHeaders(sheet, facultyName);
+    lastRow = sheet.getLastRow();
+  }
+
+  var numRows = sheet.getLastRow();
+  var dateValues = sheet.getRange(1, 2, numRows, 1).getValues();
+
+  // Find range of existing rows for this date
+  var firstDateRow = -1;
+  var lastDateRow = -1;
+
+  for (var r = 5; r <= numRows; r++) {
+    var d = (dateValues[r - 1][0] || "").toString().trim();
+    if (d === displayDate || d === dateIso) {
+      if (firstDateRow === -1) firstDateRow = r;
+      lastDateRow = r;
+    }
+  }
+
+  // If old rows exist for this date, delete them to insert the fresh, updated set cleanly
+  if (firstDateRow !== -1 && lastDateRow !== -1) {
+    var countToDelete = lastDateRow - firstDateRow + 1;
+    sheet.deleteRows(firstDateRow, countToDelete);
+  }
+
+  // Calculate insertion start row
+  var insertStartRow = firstDateRow !== -1 ? firstDateRow : sheet.getLastRow() + 1;
+  var rowsToInsert = [];
+
+  for (var i = 0; i < logs.length; i++) {
+    var item = logs[i];
+    var cleanSlot = (item.slot || ("P" + (i + 1))).trim();
+    var cleanCourse = (item.courseName || item.course || "-").trim();
+    var cleanSection = (item.section || "-").trim();
+    var cleanCredits = (item.credits || "3").toString().trim();
+    var cleanUnit = (item.unitNo || item.unit || "-").toString().trim();
+    var cleanTopic = sanitizeTopicContent(item.topicName || item.activity || "");
+
+    rowsToInsert.push([
+      i + 1, // SNO restarts per date block or continues sequentially
+      displayDate,
+      cleanSlot,
+      cleanSection,
+      cleanCourse,
+      cleanCredits,
+      cleanUnit,
+      cleanTopic,
+      "Submitted"
+    ]);
+  }
+
+  if (rowsToInsert.length > 0) {
+    if (firstDateRow !== -1) {
+      sheet.insertRowsBefore(insertStartRow, rowsToInsert.length);
+    }
+    var targetRange = sheet.getRange(insertStartRow, 1, rowsToInsert.length, 9);
+    targetRange.setValues(rowsToInsert)
+      .setFontSize(10)
+      .setVerticalAlignment("middle");
+    sheet.getRange(insertStartRow, 1, rowsToInsert.length, 2).setHorizontalAlignment("center");
+    sheet.getRange(insertStartRow, 3, rowsToInsert.length, 2).setHorizontalAlignment("center");
+    sheet.getRange(insertStartRow, 6, rowsToInsert.length, 2).setHorizontalAlignment("center");
+    sheet.getRange(insertStartRow, 9, rowsToInsert.length, 1).setHorizontalAlignment("center");
+
+    for (var k = 0; k < rowsToInsert.length; k++) {
+      sheet.setRowHeight(insertStartRow + k, 22);
+    }
+  }
+
+  // Re-index all S.No across the faculty tab
+  var finalRows = sheet.getLastRow();
+  var snoCount = 1;
+  for (var f = 5; f <= finalRows; f++) {
+    var hasEntry = sheet.getRange(f, 2).getValue();
+    if (hasEntry) {
+      sheet.getRange(f, 1).setValue(snoCount).setHorizontalAlignment("center");
+      snoCount++;
+    }
+  }
+
+  return rowsToInsert.length;
 }
 
 function doGet(e) {
   return createJsonResponse({
     status: "active",
-    message: "Faculty Activity Tracker Google Sheets Endpoint is running with Clean 11-Column Schema & Fingerprint Deduplication.",
+    message: "Faculty Activity Tracker Google Sheets Endpoint is running with Institutional Sectional Master Layout & Same-Day Upsert.",
     activeSpreadsheet: SpreadsheetApp.getActiveSpreadsheet().getName()
   });
 }
@@ -867,5 +1129,3 @@ function createJsonResponse(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 `;
-
-
